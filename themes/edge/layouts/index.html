@@ -1,7 +1,7 @@
 {{ define "main" }}
 
 <!-- Sign-in prompt (shown when not authenticated) -->
-<div id="signin-prompt" class="d-none text-center py-5">
+<div id="signin-prompt" class="text-center py-5">
   <div class="card mx-auto shadow-sm border-0" style="max-width:380px">
     <div class="card-body p-4">
       <i class="bi bi-graph-up-arrow fs-1 text-primary mb-3 d-block"></i>
@@ -169,21 +169,17 @@ firebase.auth().onAuthStateChanged(user => {
   const controlsEl = document.getElementById('controls-card');
 
   if (!user) {
-    signinEl.classList.remove('d-none');
-    guardEl.classList.add('d-none');
-    controlsEl.classList.add('d-none');
-    return;
-  }
-
-  if (!isEmailAllowed(user.email)) {
-    signinEl.classList.add('d-none');
-    guardEl.classList.remove('d-none');
-    controlsEl.classList.add('d-none');
+    // signinEl is visible by default; nothing else to show
     return;
   }
 
   signinEl.classList.add('d-none');
-  guardEl.classList.add('d-none');
+
+  if (!isEmailAllowed(user.email)) {
+    guardEl.classList.remove('d-none');
+    return;
+  }
+
   controlsEl.classList.remove('d-none');
 
   const sel = document.getElementById('sel-city');
