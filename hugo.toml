@@ -1,0 +1,29 @@
+baseURL = "/"
+languageCode = "en-us"
+title = "Market Edge"
+theme = "edge"
+
+[params]
+  description = "NBM forecast vs Polymarket price comparison for weather prediction markets"
+  backendURL = "http://localhost:8080"
+
+  [params.firebase.api]
+    key = ""
+  [params.firebase.auth]
+    domain = ""
+  [params.firebase.project]
+    id = ""
+  [params.firebase.storage]
+    bucket = ""
+  [params.firebase.messaging.sender]
+    id = ""
+  [params.firebase.app]
+    id = ""
+
+  [params.allowed]
+    emails = ""
+
+[markup]
+  [markup.goldmark]
+    [markup.goldmark.renderer]
+      unsafe = true

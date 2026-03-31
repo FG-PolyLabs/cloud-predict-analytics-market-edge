@@ -1,0 +1,456 @@
+{{ define "main" }}
+
+<!-- Sign-in prompt (shown when not authenticated) -->
+<div id="signin-prompt" class="d-none text-center py-5">
+  <div class="card mx-auto shadow-sm border-0" style="max-width:380px">
+    <div class="card-body p-4">
+      <i class="bi bi-graph-up-arrow fs-1 text-primary mb-3 d-block"></i>
+      <h4 class="fw-semibold mb-1">Market Edge</h4>
+      <p class="text-muted small mb-4">NBM ensemble vs Polymarket price comparison</p>
+      <button class="btn btn-primary w-100" onclick="signInWithGoogle()">
+        <i class="bi bi-google me-2"></i>Sign in with Google
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Auth guard (signed in but not authorized) -->
+<div id="auth-guard" class="alert alert-warning d-none">
+  <i class="bi bi-lock me-1"></i>Your account is not authorized. Contact the administrator.
+</div>
+
+<!-- Controls -->
+<div class="card shadow-sm border-0 mb-3 d-none" id="controls-card">
+  <div class="card-body py-3">
+    <div class="row g-2 align-items-end">
+      <div class="col-sm-auto">
+        <label class="form-label small fw-medium mb-1" for="sel-city">City</label>
+        <select class="form-select form-select-sm" id="sel-city" style="min-width:180px">
+          <option value="">— select city —</option>
+        </select>
+      </div>
+      <div class="col-sm-auto">
+        <label class="form-label small fw-medium mb-1" for="inp-forecast-date">
+          Forecast Date <span class="text-muted fw-normal">(date fetched)</span>
+        </label>
+        <input type="date" class="form-control form-control-sm" id="inp-forecast-date">
+      </div>
+      <div class="col-sm-auto">
+        <button class="btn btn-primary btn-sm" onclick="loadComparison()">
+          <i class="bi bi-arrow-repeat me-1"></i>Load
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Loading -->
+<div id="loading" class="text-center py-5 d-none">
+  <div class="spinner-border text-primary" role="status"></div>
+  <p class="text-muted small mt-2">Fetching NBM + Polymarket data…</p>
+</div>
+
+<!-- Empty state -->
+<div id="empty-state" class="text-center py-5 d-none">
+  <i class="bi bi-inbox fs-1 text-muted"></i>
+  <p class="text-muted mt-2">No forecasts found for this city + forecast date.</p>
+</div>
+
+<!-- Chart card -->
+<div class="card shadow-sm border-0 mb-3 d-none" id="chart-card">
+  <div class="card-header bg-transparent border-bottom-0 pt-3 pb-0 d-flex align-items-center gap-3 flex-wrap">
+    <span class="fw-medium small">Bracket Comparison</span>
+    <select class="form-select form-select-sm" id="chart-date-sel" style="max-width:220px"></select>
+    <span class="text-muted small" id="chart-subtitle"></span>
+  </div>
+  <div class="card-body">
+    <canvas id="edge-chart" style="max-height:320px"></canvas>
+  </div>
+</div>
+
+<!-- Per-date tables (injected by JS) -->
+<div id="results-area"></div>
+
+{{ end }}
+
+{{ define "page-scripts" }}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script>
+// ── City list ──────────────────────────────────────────────────────────────
+// Slugs must match BQ city slugs AND Polymarket event slug format.
+// Update this list to match tracked cities in weather-api.
+const CITIES = [
+  { slug: 'miami',       label: 'Miami, FL' },
+  { slug: 'nyc',         label: 'New York, NY' },
+  { slug: 'chicago',     label: 'Chicago, IL' },
+  { slug: 'los-angeles', label: 'Los Angeles, CA' },
+  { slug: 'seattle',     label: 'Seattle, WA' },
+  { slug: 'denver',      label: 'Denver, CO' },
+];
+
+// ── Bracket parsing ────────────────────────────────────────────────────────
+// Returns { type: 'range'|'above'|'below', lo?: number, hi?: number } in °C,
+// or null if the text can't be parsed into a bracket.
+function parseBracket(text) {
+  if (!text) return null;
+  const t = text.replace(/\u2013|\u2014/g, '-'); // normalize en-dash / em-dash
+
+  // "X-Y°F" range
+  let m = t.match(/(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)\s*°?\s*[Ff]/);
+  if (m) return { type: 'range', lo: (+m[1] - 32) * 5 / 9, hi: (+m[2] - 32) * 5 / 9 };
+
+  // "X-Y°C" range
+  m = t.match(/(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)\s*°?\s*[Cc]/);
+  if (m) return { type: 'range', lo: +m[1], hi: +m[2] };
+
+  // "above X°F" / "over X°F"
+  m = t.match(/(?:above|over)\s+(\d+(?:\.\d+)?)\s*°?\s*[Ff]/i);
+  if (m) return { type: 'above', lo: (+m[1] - 32) * 5 / 9 };
+
+  // "above X°C" / "over X°C"
+  m = t.match(/(?:above|over)\s+(\d+(?:\.\d+)?)\s*°?\s*[Cc]/i);
+  if (m) return { type: 'above', lo: +m[1] };
+
+  // "below X°F" / "under X°F"
+  m = t.match(/(?:below|under)\s+(\d+(?:\.\d+)?)\s*°?\s*[Ff]/i);
+  if (m) return { type: 'below', hi: (+m[1] - 32) * 5 / 9 };
+
+  // "below X°C" / "under X°C"
+  m = t.match(/(?:below|under)\s+(\d+(?:\.\d+)?)\s*°?\s*[Cc]/i);
+  if (m) return { type: 'below', hi: +m[1] };
+
+  return null;
+}
+
+// Count members matching the bracket. Returns { count, n, pct } or null.
+function nbmProb(members, bracket) {
+  if (!members || !members.length || !bracket) return null;
+  const n = members.length;
+  let count;
+  if      (bracket.type === 'range') count = members.filter(t => t >= bracket.lo && t < bracket.hi).length;
+  else if (bracket.type === 'above') count = members.filter(t => t >= bracket.lo).length;
+  else if (bracket.type === 'below') count = members.filter(t => t < bracket.hi).length;
+  else return null;
+  return { count, n, pct: (count / n) * 100 };
+}
+
+// ── Gamma API ──────────────────────────────────────────────────────────────
+const MONTH_NAMES = [
+  'january','february','march','april','may','june',
+  'july','august','september','october','november','december',
+];
+
+async function fetchPolyEvent(city, targetDate) {
+  const [year, month, day] = targetDate.split('-');
+  const slug = `highest-temperature-in-${city}-on-${MONTH_NAMES[+month - 1]}-${+day}-${year}`;
+  try {
+    const res = await fetch(`https://gamma-api.polymarket.com/events?slug=${encodeURIComponent(slug)}`);
+    if (!res.ok) return null;
+    const events = await res.json();
+    return Array.isArray(events) && events.length > 0 ? events[0] : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// outcomePrices is sometimes a JSON-serialized string in the Gamma API.
+function parseOutcomePrices(market) {
+  let prices = market.outcomePrices;
+  if (typeof prices === 'string') {
+    try { prices = JSON.parse(prices); } catch (_) { return null; }
+  }
+  return Array.isArray(prices) && prices.length ? prices : null;
+}
+
+// ── Auth state ─────────────────────────────────────────────────────────────
+firebase.auth().onAuthStateChanged(user => {
+  const signinEl   = document.getElementById('signin-prompt');
+  const guardEl    = document.getElementById('auth-guard');
+  const controlsEl = document.getElementById('controls-card');
+
+  if (!user) {
+    signinEl.classList.remove('d-none');
+    guardEl.classList.add('d-none');
+    controlsEl.classList.add('d-none');
+    return;
+  }
+
+  if (!isEmailAllowed(user.email)) {
+    signinEl.classList.add('d-none');
+    guardEl.classList.remove('d-none');
+    controlsEl.classList.add('d-none');
+    return;
+  }
+
+  signinEl.classList.add('d-none');
+  guardEl.classList.add('d-none');
+  controlsEl.classList.remove('d-none');
+
+  const sel = document.getElementById('sel-city');
+  CITIES.forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = c.slug;
+    opt.textContent = c.label;
+    sel.appendChild(opt);
+  });
+
+  document.getElementById('inp-forecast-date').value = new Date().toISOString().slice(0, 10);
+});
+
+// ── Main load ──────────────────────────────────────────────────────────────
+let edgeChart = null;
+let _combined = [];
+
+async function loadComparison() {
+  const city         = document.getElementById('sel-city').value;
+  const forecastDate = document.getElementById('inp-forecast-date').value;
+  if (!city) { showToast('Please select a city.', 'warning'); return; }
+
+  const loadingEl = document.getElementById('loading');
+  const emptyEl   = document.getElementById('empty-state');
+  const chartCard = document.getElementById('chart-card');
+  const resultsEl = document.getElementById('results-area');
+
+  loadingEl.classList.remove('d-none');
+  emptyEl.classList.add('d-none');
+  chartCard.classList.add('d-none');
+  resultsEl.innerHTML = '';
+  _combined = [];
+
+  try {
+    const params = { city };
+    if (forecastDate) params.forecast_date = forecastDate;
+    const rows = await api('GET', '/nbm-forecasts' + qs(params));
+
+    if (!rows || rows.length === 0) {
+      loadingEl.classList.add('d-none');
+      emptyEl.classList.remove('d-none');
+      return;
+    }
+
+    // One NBM row per target_date (use whichever comes first)
+    const byDate = {};
+    rows.forEach(r => { if (!byDate[r.target_date]) byDate[r.target_date] = r; });
+    const targetDates = Object.keys(byDate).sort();
+
+    // Fetch all Polymarket events in parallel
+    const polyEvents = await Promise.all(targetDates.map(d => fetchPolyEvent(city, d)));
+
+    _combined = targetDates.map((d, i) => ({
+      date:  d,
+      nbm:   byDate[d],
+      event: polyEvents[i] || null,
+    }));
+
+    loadingEl.classList.add('d-none');
+    renderResults();
+  } catch (e) {
+    loadingEl.classList.add('d-none');
+    showToast('Load failed: ' + e.message, 'danger');
+  }
+}
+
+// ── Rendering ──────────────────────────────────────────────────────────────
+function edgeBadge(edge) {
+  if (edge === null) return '<span class="text-muted">—</span>';
+  const fmt = (edge >= 0 ? '+' : '') + edge.toFixed(1) + '%';
+  if (edge > 5)  return `<span class="badge bg-success">${fmt} BET YES</span>`;
+  if (edge < -5) return `<span class="badge bg-danger">${fmt} BET NO</span>`;
+  return `<span class="text-muted small">${fmt}</span>`;
+}
+
+function escHtml(str) {
+  const d = document.createElement('div');
+  d.appendChild(document.createTextNode(String(str)));
+  return d.innerHTML;
+}
+
+// Extract just the temperature bracket portion for short chart labels.
+function shortLabel(question) {
+  const m = question.match(
+    /(\d+(?:\.\d+)?\s*[-\u2013\u2014]\s*\d+(?:\.\d+)?\s*°?[CFcf]|(?:above|below|over|under)\s+\d+(?:\.\d+)?\s*°?[CFcf])/i
+  );
+  if (m) return m[1];
+  return question.length > 36 ? question.slice(0, 34) + '\u2026' : question;
+}
+
+function renderResults() {
+  const resultsEl = document.getElementById('results-area');
+  const chartCard = document.getElementById('chart-card');
+  const chartSel  = document.getElementById('chart-date-sel');
+
+  resultsEl.innerHTML = '';
+  chartSel.innerHTML  = '';
+
+  _combined.forEach(entry => {
+    const { date, nbm, event } = entry;
+    const members = (nbm.member_temps && nbm.member_temps.length) ? nbm.member_temps : null;
+    const markets = (event && Array.isArray(event.markets)) ? event.markets : [];
+
+    // Compute one row per market (bracket)
+    const rows = markets.map(mkt => {
+      const prices  = parseOutcomePrices(mkt);
+      const yesPct  = prices ? parseFloat(prices[0]) * 100 : null;
+      const label   = mkt.question || mkt.title || '';
+      const bracket = parseBracket(label);
+      const res     = nbmProb(members, bracket);
+      const nbmPct  = res ? res.pct : null;
+      const edge    = (yesPct !== null && nbmPct !== null) ? nbmPct - yesPct : null;
+      return { label, yesPct, nbmPct, nbmCount: res ? res.count : null, nbmN: res ? res.n : null, edge };
+    });
+
+    // Date label
+    const dateObj   = new Date(date + 'T12:00:00Z');
+    const dateLabel = dateObj.toLocaleDateString('en-US', {
+      weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC',
+    });
+
+    // Chart date option
+    const opt = document.createElement('option');
+    opt.value = date;
+    opt.textContent = `${dateLabel} (lead ${nbm.lead_days}d)`;
+    chartSel.appendChild(opt);
+
+    const tableBody = rows.length > 0
+      ? rows.map(r => `
+          <tr>
+            <td class="ps-3 text-wrap" style="max-width:360px">${escHtml(r.label)}</td>
+            <td class="text-end">${r.yesPct !== null ? r.yesPct.toFixed(1) + '%' : '<span class="text-muted">—</span>'}</td>
+            <td class="text-end">${r.nbmPct !== null ? r.nbmPct.toFixed(1) + '%' : '<span class="text-muted">—</span>'}</td>
+            <td class="text-center">${edgeBadge(r.edge)}</td>
+            <td class="text-end text-muted">${r.nbmCount !== null ? r.nbmCount + '/' + r.nbmN : '—'}</td>
+          </tr>`).join('')
+      : `<tr><td colspan="5" class="ps-3 py-2 text-muted fst-italic">No Polymarket markets found for this date.</td></tr>`;
+
+    const nbmSummary =
+      `\u03bc\u202f=\u202f${nbm.predicted_max_temp_c.toFixed(1)}\u00b0C` +
+      `\u2002\u03c3\u202f=\u202f${nbm.temp_std_dev_c.toFixed(1)}\u00b0C` +
+      `\u2002p10\u202f=\u202f${nbm.p10_temp_c.toFixed(1)}\u00b0C` +
+      `\u2002p90\u202f=\u202f${nbm.p90_temp_c.toFixed(1)}\u00b0C`;
+
+    const section = document.createElement('div');
+    section.className = 'card shadow-sm border-0 mb-3';
+    section.innerHTML = `
+      <div class="card-header bg-transparent d-flex align-items-center gap-2 flex-wrap py-2">
+        <span class="fw-medium">${escHtml(dateLabel)}</span>
+        <span class="badge bg-secondary">lead ${nbm.lead_days}d</span>
+        <span class="text-muted small ms-auto">${escHtml(nbmSummary)}</span>
+      </div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-hover align-middle mb-0 small">
+            <thead class="table-light">
+              <tr>
+                <th class="ps-3">Bracket</th>
+                <th class="text-end">PM YES%</th>
+                <th class="text-end">NBM%</th>
+                <th class="text-center">Edge</th>
+                <th class="text-end text-muted">Members</th>
+              </tr>
+            </thead>
+            <tbody>${tableBody}</tbody>
+          </table>
+        </div>
+      </div>`;
+
+    resultsEl.appendChild(section);
+  });
+
+  if (_combined.length > 0) {
+    chartCard.classList.remove('d-none');
+    renderChart(_combined[0].date);
+  }
+}
+
+function renderChart(selectedDate) {
+  const entry = _combined.find(c => c.date === selectedDate);
+  if (!entry) return;
+
+  const { nbm, event } = entry;
+  const members = (nbm.member_temps && nbm.member_temps.length) ? nbm.member_temps : null;
+  const markets = (event && Array.isArray(event.markets)) ? event.markets : [];
+
+  const labels  = [];
+  const pmData  = [];
+  const nbmData = [];
+
+  markets.forEach(mkt => {
+    const prices  = parseOutcomePrices(mkt);
+    const yesPct  = prices ? parseFloat(prices[0]) * 100 : null;
+    const label   = mkt.question || mkt.title || '';
+    const bracket = parseBracket(label);
+    const res     = nbmProb(members, bracket);
+    if (yesPct === null && !res) return;
+
+    labels.push(shortLabel(label));
+    pmData.push(yesPct  !== null ? parseFloat(yesPct.toFixed(1))  : null);
+    nbmData.push(res    ? parseFloat(res.pct.toFixed(1))          : null);
+  });
+
+  const subtitleEl = document.getElementById('chart-subtitle');
+  if (labels.length === 0) {
+    subtitleEl.textContent = 'No bracket data for this date.';
+    if (edgeChart) { edgeChart.destroy(); edgeChart = null; }
+    return;
+  }
+
+  subtitleEl.textContent =
+    `lead ${nbm.lead_days}d \u2014 \u03bc\u202f=\u202f${nbm.predicted_max_temp_c.toFixed(1)}\u00b0C`;
+
+  if (edgeChart) edgeChart.destroy();
+  edgeChart = new Chart(document.getElementById('edge-chart'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Polymarket YES%',
+          data: pmData,
+          backgroundColor: 'rgba(253,126,20,0.75)',
+          borderColor:     'rgba(253,126,20,1)',
+          borderWidth: 1,
+          borderRadius: 3,
+        },
+        {
+          label: 'NBM%',
+          data: nbmData,
+          backgroundColor: 'rgba(13,110,253,0.65)',
+          borderColor:     'rgba(13,110,253,0.9)',
+          borderWidth: 1,
+          borderRadius: 3,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { position: 'top' },
+        tooltip: {
+          callbacks: {
+            label: ctx => ctx.parsed.y !== null
+              ? `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}%`
+              : `${ctx.dataset.label}: \u2014`,
+          },
+        },
+      },
+      scales: {
+        x: { title: { display: true, text: 'Bracket' } },
+        y: {
+          title:       { display: true, text: 'Probability (%)' },
+          ticks:       { callback: v => v + '%' },
+          beginAtZero: true,
+          max:         100,
+        },
+      },
+    },
+  });
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('chart-date-sel').addEventListener('change', e => {
+    renderChart(e.target.value);
+  });
+});
+</script>
+{{ end }}
