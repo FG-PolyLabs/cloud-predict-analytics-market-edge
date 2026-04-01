@@ -80,19 +80,35 @@
 // Slugs must match BQ city slugs AND Polymarket event slug format.
 // Update this list to match tracked cities in weather-api.
 const CITIES = [
-  { slug: 'ankara',       label: 'Ankara' },
-  { slug: 'buenos-aires', label: 'Buenos Aires' },
-  { slug: 'chicago',      label: 'Chicago, IL' },
-  { slug: 'dallas',       label: 'Dallas, TX' },
-  { slug: 'london',       label: 'London' },
-  { slug: 'miami',        label: 'Miami, FL' },
-  { slug: 'nyc',          label: 'New York, NY' },
-  { slug: 'paris',        label: 'Paris' },
-  { slug: 'seoul',        label: 'Seoul' },
-  { slug: 'singapore',    label: 'Singapore' },
-  { slug: 'tokyo',        label: 'Tokyo' },
-  { slug: 'toronto',      label: 'Toronto' },
+  { slug: 'ankara',       label: 'Ankara',       lat:  39.9334, lon:  32.8597 },
+  { slug: 'buenos-aires', label: 'Buenos Aires', lat: -34.6037, lon: -58.3816 },
+  { slug: 'chicago',      label: 'Chicago, IL',  lat:  41.8781, lon: -87.6298 },
+  { slug: 'dallas',       label: 'Dallas, TX',   lat:  32.7767, lon: -96.7970 },
+  { slug: 'london',       label: 'London',       lat:  51.5074, lon:  -0.1278 },
+  { slug: 'miami',        label: 'Miami, FL',    lat:  25.7617, lon: -80.1918 },
+  { slug: 'nyc',          label: 'New York, NY', lat:  40.7128, lon: -74.0060 },
+  { slug: 'paris',        label: 'Paris',        lat:  48.8566, lon:   2.3522 },
+  { slug: 'seoul',        label: 'Seoul',        lat:  37.5665, lon: 126.9780 },
+  { slug: 'singapore',    label: 'Singapore',    lat:   1.3521, lon: 103.8198 },
+  { slug: 'tokyo',        label: 'Tokyo',        lat:  35.6762, lon: 139.6503 },
+  { slug: 'toronto',      label: 'Toronto',      lat:  43.6532, lon: -79.3832 },
 ];
+
+const MONTH_NAMES = ['january','february','march','april','may','june',
+                     'july','august','september','october','november','december'];
+
+// Reconstruct the Polymarket event slug (mirrors server-side polymarket_proxy.go logic)
+function polymarketEventSlug(citySlug, dateStr) {
+  const d = new Date(dateStr + 'T12:00:00Z');
+  return `highest-temperature-in-${citySlug}-on-${MONTH_NAMES[d.getUTCMonth()]}-${d.getUTCDate()}-${d.getUTCFullYear()}`;
+}
+
+// Open-Meteo ensemble visualization URL for a city
+function openMeteoURL(city) {
+  return `https://open-meteo.com/en/docs/ensemble-api` +
+    `#latitude=${city.lat}&longitude=${city.lon}` +
+    `&models=gfs_seamless&daily=temperature_2m_max&forecast_days=16`;
+}
 
 // ── Bracket parsing ────────────────────────────────────────────────────────
 // Returns { type: 'range'|'above'|'below', lo?: number, hi?: number } in °C,
@@ -339,6 +355,9 @@ function renderResults() {
   resultsEl.innerHTML = '';
   chartSel.innerHTML  = '';
 
+  const citySlug = document.getElementById('sel-city').value;
+  const cityObj  = CITIES.find(c => c.slug === citySlug);
+
   _combined.forEach(entry => {
     const { date, nbm, markets } = entry;
     const members = (nbm.member_temps && nbm.member_temps.length) ? nbm.member_temps : null;
@@ -350,19 +369,25 @@ function renderResults() {
       return bracketSortKey(ba) - bracketSortKey(bb);
     });
 
+    const eventSlug = polymarketEventSlug(citySlug, date);
     const rows = sortedMarkets.map(mkt => {
-      const prices   = parseOutcomePrices(mkt);
-      const yesPct   = prices ? parseFloat(prices[0]) * 100 : null;
-      const noPct    = prices && prices.length > 1 ? parseFloat(prices[1]) * 100 : null;
-      const label    = mkt.question || mkt.title || '';
-      const bracket  = parseBracket(label);
-      const res      = nbmProb(members, bracket);
-      const meteoPct = res ? res.pct : null;
+      const prices    = parseOutcomePrices(mkt);
+      const yesPct    = prices ? parseFloat(prices[0]) * 100 : null;
+      const noPct     = prices && prices.length > 1 ? parseFloat(prices[1]) * 100 : null;
+      const label     = mkt.question || mkt.title || '';
+      const bracket   = parseBracket(label);
+      const res       = nbmProb(members, bracket);
+      const meteoPct  = res ? res.pct : null;
       const meteoEdge = (yesPct !== null && meteoPct !== null) ? meteoPct - yesPct : null;
-      const fp       = fitProb(bracket, nbm.predicted_max_temp_c, nbm.temp_std_dev_c, nbm.skewness);
-      const fitEdge  = (yesPct !== null && fp !== null) ? fp - yesPct : null;
+      const fp        = fitProb(bracket, nbm.predicted_max_temp_c, nbm.temp_std_dev_c, nbm.skewness);
+      const fitEdge   = (yesPct !== null && fp !== null) ? fp - yesPct : null;
+      // Polymarket market URL — deep-link to specific market if slug available, else event page
+      const mktSlug   = mkt.slug || null;
+      const pmUrl     = mktSlug
+        ? `https://polymarket.com/event/${eventSlug}/${mktSlug}`
+        : `https://polymarket.com/event/${eventSlug}`;
       return { label, yesPct, noPct, meteoPct, meteoCount: res ? res.count : null, meteoN: res ? res.n : null,
-               meteoEdge, fitPct: fp, fitEdge };
+               meteoEdge, fitPct: fp, fitEdge, pmUrl };
     });
 
     // Date label
@@ -381,7 +406,13 @@ function renderResults() {
     const tableBody = rows.length > 0
       ? rows.map(r => `
           <tr>
-            <td class="ps-3 text-wrap" style="max-width:260px">${escHtml(r.label)}</td>
+            <td class="ps-3 text-wrap" style="max-width:260px">
+              ${escHtml(r.label)}
+              <a href="${escHtml(r.pmUrl)}" target="_blank" rel="noopener"
+                 class="ms-1 text-muted" title="View on Polymarket" style="font-size:.75em">
+                <i class="bi bi-box-arrow-up-right"></i>
+              </a>
+            </td>
             <td class="text-end">${pct(r.yesPct)}</td>
             <td class="text-end">${pct(r.noPct)}</td>
             <td class="text-end">${pct(r.meteoPct)}</td>
@@ -405,6 +436,10 @@ function renderResults() {
         <span class="fw-medium">${escHtml(dateLabel)}</span>
         <span class="badge bg-secondary">lead ${nbm.lead_days}d</span>
         <span class="text-muted small ms-auto">${escHtml(nbmSummary)}</span>
+        ${cityObj ? `<a href="${escHtml(openMeteoURL(cityObj))}" target="_blank" rel="noopener"
+           class="text-muted small ms-2" title="View on Open-Meteo">
+           <i class="bi bi-box-arrow-up-right"></i> Open-Meteo
+        </a>` : ''}
       </div>
       <div class="card-body p-0">
         <div class="table-responsive">
