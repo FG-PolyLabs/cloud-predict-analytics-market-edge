@@ -113,37 +113,44 @@ function openMeteoURL(city) {
 // ── Bracket parsing ────────────────────────────────────────────────────────
 // Returns { type: 'range'|'above'|'below', lo?: number, hi?: number } in °C,
 // or null if the text can't be parsed into a bracket.
+// parseBracket returns { type, lo?, hi?, unit } in °C.
+//
+// Polymarket uses Weather Underground which rounds observed temps to the
+// nearest whole degree. So "78-79°F" means any actual high that rounds to
+// 78 or 79 — i.e. the true range is [77.5, 79.5°F). Boundaries are shifted
+// ±0.5 of the original unit before converting to °C so member counts are
+// correctly attributed (this also makes consecutive brackets contiguous).
 function parseBracket(text) {
   if (!text) return null;
   const t = text.replace(/\u2013|\u2014/g, '-'); // normalize en-dash / em-dash
 
-  // "X-Y°F" range
+  // "X-Y°F" range → actual [X-0.5, Y+0.5)°F
   let m = t.match(/(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)\s*°?\s*[Ff]/);
-  if (m) return { type: 'range', lo: (+m[1] - 32) * 5 / 9, hi: (+m[2] - 32) * 5 / 9 };
+  if (m) return { type: 'range', lo: (+m[1] - 0.5 - 32) * 5/9, hi: (+m[2] + 0.5 - 32) * 5/9, unit: 'F' };
 
-  // "X-Y°C" range
+  // "X-Y°C" range → actual [X-0.5, Y+0.5)°C
   m = t.match(/(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)\s*°?\s*[Cc]/);
-  if (m) return { type: 'range', lo: +m[1], hi: +m[2] };
+  if (m) return { type: 'range', lo: +m[1] - 0.5, hi: +m[2] + 0.5, unit: 'C' };
 
-  // "above X°F" / "over X°F" / "X°F or higher" / "X°F or above"
+  // "above X°F" / "over X°F" / "X°F or higher" / "X°F or above" → actual [X-0.5, ∞)°F
   m = t.match(/(?:above|over)\s+(\d+(?:\.\d+)?)\s*°?\s*[Ff]/i)
    || t.match(/(\d+(?:\.\d+)?)\s*°?\s*[Ff]\s+or\s+(?:higher|above)/i);
-  if (m) return { type: 'above', lo: (+m[1] - 32) * 5 / 9 };
+  if (m) return { type: 'above', lo: (+m[1] - 0.5 - 32) * 5/9, unit: 'F' };
 
   // "above X°C" / "over X°C" / "X°C or higher" / "X°C or above"
   m = t.match(/(?:above|over)\s+(\d+(?:\.\d+)?)\s*°?\s*[Cc]/i)
    || t.match(/(\d+(?:\.\d+)?)\s*°?\s*[Cc]\s+or\s+(?:higher|above)/i);
-  if (m) return { type: 'above', lo: +m[1] };
+  if (m) return { type: 'above', lo: +m[1] - 0.5, unit: 'C' };
 
-  // "below X°F" / "under X°F" / "X°F or below" / "X°F or lower"
+  // "below X°F" / "under X°F" / "X°F or below" / "X°F or lower" → actual (-∞, X+0.5)°F
   m = t.match(/(?:below|under)\s+(\d+(?:\.\d+)?)\s*°?\s*[Ff]/i)
    || t.match(/(\d+(?:\.\d+)?)\s*°?\s*[Ff]\s+or\s+(?:below|lower)/i);
-  if (m) return { type: 'below', hi: (+m[1] - 32) * 5 / 9 };
+  if (m) return { type: 'below', hi: (+m[1] + 0.5 - 32) * 5/9, unit: 'F' };
 
   // "below X°C" / "under X°C" / "X°C or below" / "X°C or lower"
   m = t.match(/(?:below|under)\s+(\d+(?:\.\d+)?)\s*°?\s*[Cc]/i)
    || t.match(/(\d+(?:\.\d+)?)\s*°?\s*[Cc]\s+or\s+(?:below|lower)/i);
-  if (m) return { type: 'below', hi: +m[1] };
+  if (m) return { type: 'below', hi: +m[1] + 0.5, unit: 'C' };
 
   return null;
 }
@@ -403,12 +410,19 @@ function renderResults() {
     chartSel.appendChild(opt);
 
     const pct = v => v !== null ? v.toFixed(1) + '%' : '<span class="text-muted">—</span>';
+
+    // Detect display unit (°F or °C) from the markets for this date
+    const allBrackets = rows.map(r => parseBracket(r.label)).filter(Boolean);
+    const displayUnit = allBrackets.some(b => b.unit === 'F') ? 'F' : 'C';
+    const toDisp      = c => displayUnit === 'F' ? c * 9/5 + 32 : c;  // temp conversion
+    const toDispDelta = c => displayUnit === 'F' ? c * 9/5 : c;       // σ: scale only, no offset
+    const unitStr     = displayUnit === 'F' ? '°F' : '°C';
+
     // Members accounted for across all brackets; any remainder has no matching PM market
     const totalMembers = members ? members.length : 0;
-    const parsedBrackets = rows.map(r => parseBracket(r.label));
+    const parsedBrackets = allBrackets; // already computed above
     const unaccountedTemps = members
       ? members.filter(t => !parsedBrackets.some(b => {
-          if (!b) return false;
           if (b.type === 'range') return t >= b.lo && t < b.hi;
           if (b.type === 'above') return t >= b.lo;
           if (b.type === 'below') return t < b.hi;
@@ -417,17 +431,17 @@ function renderResults() {
       : [];
     const unaccounted = unaccountedTemps.length;
 
-    // Sort and format unaccounted temps as °F for readability
-    const unaccountedF = [...unaccountedTemps]
+    // Format unaccounted temps in the same unit as the PM markets
+    const unaccountedLabels = [...unaccountedTemps]
       .sort((a, b) => a - b)
-      .map(t => (t * 9 / 5 + 32).toFixed(1) + '°F')
+      .map(t => toDisp(t).toFixed(1) + unitStr)
       .join(', ');
 
     const unaccountedRow = (unaccounted > 0 && totalMembers > 0) ? `
       <tr class="table-warning">
         <td class="ps-3 text-wrap fst-italic" style="max-width:260px">
           <span class="text-muted">Outside all PM brackets</span>
-          <div class="text-muted" style="font-size:.78em;word-break:break-word">${escHtml(unaccountedF)}</div>
+          <div class="text-muted" style="font-size:.78em;word-break:break-word">${escHtml(unaccountedLabels)}</div>
         </td>
         <td class="text-end text-muted">—</td>
         <td class="text-end text-muted">—</td>
@@ -459,10 +473,11 @@ function renderResults() {
       : `<tr><td colspan="8" class="ps-3 py-2 text-muted fst-italic">No Polymarket markets found for this date.</td></tr>`;
 
     const nbmSummary =
-      `\u03bc\u202f=\u202f${nbm.predicted_max_temp_c.toFixed(1)}\u00b0C` +
-      `\u2002\u03c3\u202f=\u202f${nbm.temp_std_dev_c.toFixed(1)}\u00b0C` +
-      `\u2002p10\u202f=\u202f${nbm.p10_temp_c.toFixed(1)}\u00b0C` +
-      `\u2002p90\u202f=\u202f${nbm.p90_temp_c.toFixed(1)}\u00b0C`;
+      `\u03bc\u202f=\u202f${toDisp(nbm.predicted_max_temp_c).toFixed(1)}${unitStr}` +
+      `\u2002\u03c3\u202f=\u202f${toDispDelta(nbm.temp_std_dev_c).toFixed(1)}${unitStr}` +
+      `\u2002skew\u202f=\u202f${nbm.skewness.toFixed(2)}` +
+      `\u2002p10\u202f=\u202f${toDisp(nbm.p10_temp_c).toFixed(1)}${unitStr}` +
+      `\u2002p90\u202f=\u202f${toDisp(nbm.p90_temp_c).toFixed(1)}${unitStr}`;
 
     const section = document.createElement('div');
     section.className = 'card shadow-sm border-0 mb-3';
@@ -550,8 +565,12 @@ function renderChart(selectedDate) {
     return;
   }
 
+  const chartBrackets = sortedForChart.map(m => parseBracket(m.question || m.title || '')).filter(Boolean);
+  const chartUnit = chartBrackets.some(b => b.unit === 'F') ? 'F' : 'C';
+  const chartToDisp = c => chartUnit === 'F' ? c * 9/5 + 32 : c;
+  const chartUnitStr = chartUnit === 'F' ? '°F' : '°C';
   subtitleEl.textContent =
-    `lead ${nbm.lead_days}d \u2014 \u03bc\u202f=\u202f${nbm.predicted_max_temp_c.toFixed(1)}\u00b0C`;
+    `lead ${nbm.lead_days}d \u2014 \u03bc\u202f=\u202f${chartToDisp(nbm.predicted_max_temp_c).toFixed(1)}${chartUnitStr}`;
 
   if (edgeChart) edgeChart.destroy();
   edgeChart = new Chart(document.getElementById('edge-chart'), {
