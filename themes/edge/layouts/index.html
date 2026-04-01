@@ -403,6 +403,26 @@ function renderResults() {
     chartSel.appendChild(opt);
 
     const pct = v => v !== null ? v.toFixed(1) + '%' : '<span class="text-muted">—</span>';
+    // Members accounted for across all brackets; any remainder has no matching PM market
+    const totalMembers = members ? members.length : 0;
+    const countedMembers = rows.reduce((sum, r) => sum + (r.meteoCount || 0), 0);
+    const unaccounted = totalMembers > 0 ? totalMembers - countedMembers : 0;
+
+    const unaccountedRow = (unaccounted > 0 && totalMembers > 0) ? `
+      <tr class="table-warning">
+        <td class="ps-3 text-wrap fst-italic text-muted" style="max-width:260px"
+            title="These members predict a temperature that falls outside all listed Polymarket brackets for this date.">
+          Outside all PM brackets
+        </td>
+        <td class="text-end text-muted">—</td>
+        <td class="text-end text-muted">—</td>
+        <td class="text-end text-muted">${(unaccounted / totalMembers * 100).toFixed(1)}%</td>
+        <td class="text-end text-muted small">${unaccounted}/${totalMembers}</td>
+        <td class="text-center text-muted">—</td>
+        <td class="text-end text-muted">—</td>
+        <td class="text-center text-muted">—</td>
+      </tr>` : '';
+
     const tableBody = rows.length > 0
       ? rows.map(r => `
           <tr>
@@ -420,7 +440,7 @@ function renderResults() {
             <td class="text-center">${edgeBadge(r.meteoEdge)}</td>
             <td class="text-end">${pct(r.fitPct)}</td>
             <td class="text-center">${edgeBadge(r.fitEdge)}</td>
-          </tr>`).join('')
+          </tr>`).join('') + unaccountedRow
       : `<tr><td colspan="8" class="ps-3 py-2 text-muted fst-italic">No Polymarket markets found for this date.</td></tr>`;
 
     const nbmSummary =
