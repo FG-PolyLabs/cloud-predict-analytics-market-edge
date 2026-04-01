@@ -499,11 +499,11 @@ function renderResults() {
                 <th class="ps-3" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Temperature range from the Polymarket market">Bracket</th>
                 <th class="text-end" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Polymarket asking price for YES — the market&#39;s implied probability that the high temperature falls in this bracket">PM YES%</th>
                 <th class="text-end" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Polymarket asking price for NO — the independent ask price to buy a NO position on this bracket. Sourced directly from Polymarket, not derived from YES%.">PM NO%</th>
-                <th class="text-end" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Empirical probability from 30 GFS ensemble members: fraction of members whose predicted high falls in this bracket">Meteo%</th>
+                <th class="text-end" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Empirical probability from 30 GFS ensemble members: fraction of members whose predicted high falls in this bracket">Meteo Members%</th>
                 <th class="text-end text-muted" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Number of ensemble members whose predicted high falls in this bracket, out of 30 total">Members</th>
-                <th class="text-center" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Meteo% minus PM YES%. Positive = model sees higher probability than the market implies (potential YES value). Negative = market overprices this outcome (potential NO value).">Meteo Raw Edge</th>
-                <th class="text-end" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Skew-normal probability fitted to the ensemble mean, std dev, and skewness. A smooth estimate that works even when few members fall in a bracket.">Fit%</th>
-                <th class="text-center" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Fit% minus PM YES%. Edge using the analytical skew-normal estimate rather than the raw member count.">Fit Edge</th>
+                <th class="text-center" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Meteo Members% minus PM YES%. Positive = model sees higher probability than the market implies (potential YES value). Negative = market overprices this outcome (potential NO value).">Meteo Raw Edge</th>
+                <th class="text-end" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Skew-normal probability fitted to the ensemble mean, std dev, and skewness. A smooth estimate that works even when few members fall in a bracket.">Meteo Fit%</th>
+                <th class="text-center" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Meteo Fit% minus PM YES%. Edge using the analytical skew-normal estimate rather than the raw member count.">Meteo Fit Edge</th>
               </tr>
             </thead>
             <tbody>${tableBody}</tbody>
@@ -587,7 +587,7 @@ function renderChart(selectedDate) {
           borderRadius: 3,
         },
         {
-          label: 'Meteo%',
+          label: 'Meteo Members%',
           data: meteoData,
           backgroundColor: 'rgba(13,110,253,0.65)',
           borderColor:     'rgba(13,110,253,0.9)',
@@ -595,7 +595,7 @@ function renderChart(selectedDate) {
           borderRadius: 3,
         },
         {
-          label: 'Fit% (skew-normal)',
+          label: 'Meteo Fit%',
           data: fitData,
           backgroundColor: 'rgba(25,135,84,0.65)',
           borderColor:     'rgba(25,135,84,0.9)',
