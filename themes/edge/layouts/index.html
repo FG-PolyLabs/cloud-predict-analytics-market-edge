@@ -413,7 +413,7 @@ function renderResults() {
               <tr>
                 <th class="ps-3" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Temperature range from the Polymarket market">Bracket</th>
                 <th class="text-end" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Polymarket asking price for YES — the market&#39;s implied probability that the high temperature falls in this bracket">PM YES%</th>
-                <th class="text-end" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Polymarket asking price for NO — implied probability the high does NOT fall in this bracket (roughly 1 − YES%)">PM NO%</th>
+                <th class="text-end" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Polymarket asking price for NO — the independent ask price to buy a NO position on this bracket. Sourced directly from Polymarket, not derived from YES%.">PM NO%</th>
                 <th class="text-end" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Empirical probability from 30 GFS ensemble members: fraction of members whose predicted high falls in this bracket">Meteo%</th>
                 <th class="text-end text-muted" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Number of ensemble members whose predicted high falls in this bracket, out of 30 total">Members</th>
                 <th class="text-center" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Meteo% minus PM YES%. Positive = model sees higher probability than the market implies (potential YES value). Negative = market overprices this outcome (potential NO value).">Meteo Raw Edge</th>
