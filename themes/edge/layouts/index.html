@@ -80,12 +80,18 @@
 // Slugs must match BQ city slugs AND Polymarket event slug format.
 // Update this list to match tracked cities in weather-api.
 const CITIES = [
-  { slug: 'miami',       label: 'Miami, FL' },
-  { slug: 'nyc',         label: 'New York, NY' },
-  { slug: 'chicago',     label: 'Chicago, IL' },
-  { slug: 'los-angeles', label: 'Los Angeles, CA' },
-  { slug: 'seattle',     label: 'Seattle, WA' },
-  { slug: 'denver',      label: 'Denver, CO' },
+  { slug: 'ankara',       label: 'Ankara' },
+  { slug: 'buenos-aires', label: 'Buenos Aires' },
+  { slug: 'chicago',      label: 'Chicago, IL' },
+  { slug: 'dallas',       label: 'Dallas, TX' },
+  { slug: 'london',       label: 'London' },
+  { slug: 'miami',        label: 'Miami, FL' },
+  { slug: 'nyc',          label: 'New York, NY' },
+  { slug: 'paris',        label: 'Paris' },
+  { slug: 'seoul',        label: 'Seoul' },
+  { slug: 'singapore',    label: 'Singapore' },
+  { slug: 'tokyo',        label: 'Tokyo' },
+  { slug: 'toronto',      label: 'Toronto' },
 ];
 
 // ── Bracket parsing ────────────────────────────────────────────────────────
@@ -103,20 +109,24 @@ function parseBracket(text) {
   m = t.match(/(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)\s*°?\s*[Cc]/);
   if (m) return { type: 'range', lo: +m[1], hi: +m[2] };
 
-  // "above X°F" / "over X°F"
-  m = t.match(/(?:above|over)\s+(\d+(?:\.\d+)?)\s*°?\s*[Ff]/i);
+  // "above X°F" / "over X°F" / "X°F or higher" / "X°F or above"
+  m = t.match(/(?:above|over)\s+(\d+(?:\.\d+)?)\s*°?\s*[Ff]/i)
+   || t.match(/(\d+(?:\.\d+)?)\s*°?\s*[Ff]\s+or\s+(?:higher|above)/i);
   if (m) return { type: 'above', lo: (+m[1] - 32) * 5 / 9 };
 
-  // "above X°C" / "over X°C"
-  m = t.match(/(?:above|over)\s+(\d+(?:\.\d+)?)\s*°?\s*[Cc]/i);
+  // "above X°C" / "over X°C" / "X°C or higher" / "X°C or above"
+  m = t.match(/(?:above|over)\s+(\d+(?:\.\d+)?)\s*°?\s*[Cc]/i)
+   || t.match(/(\d+(?:\.\d+)?)\s*°?\s*[Cc]\s+or\s+(?:higher|above)/i);
   if (m) return { type: 'above', lo: +m[1] };
 
-  // "below X°F" / "under X°F"
-  m = t.match(/(?:below|under)\s+(\d+(?:\.\d+)?)\s*°?\s*[Ff]/i);
+  // "below X°F" / "under X°F" / "X°F or below" / "X°F or lower"
+  m = t.match(/(?:below|under)\s+(\d+(?:\.\d+)?)\s*°?\s*[Ff]/i)
+   || t.match(/(\d+(?:\.\d+)?)\s*°?\s*[Ff]\s+or\s+(?:below|lower)/i);
   if (m) return { type: 'below', hi: (+m[1] - 32) * 5 / 9 };
 
-  // "below X°C" / "under X°C"
-  m = t.match(/(?:below|under)\s+(\d+(?:\.\d+)?)\s*°?\s*[Cc]/i);
+  // "below X°C" / "under X°C" / "X°C or below" / "X°C or lower"
+  m = t.match(/(?:below|under)\s+(\d+(?:\.\d+)?)\s*°?\s*[Cc]/i)
+   || t.match(/(\d+(?:\.\d+)?)\s*°?\s*[Cc]\s+or\s+(?:below|lower)/i);
   if (m) return { type: 'below', hi: +m[1] };
 
   return null;
@@ -134,22 +144,14 @@ function nbmProb(members, bracket) {
   return { count, n, pct: (count / n) * 100 };
 }
 
-// ── Gamma API ──────────────────────────────────────────────────────────────
-const MONTH_NAMES = [
-  'january','february','march','april','may','june',
-  'july','august','september','october','november','december',
-];
-
-async function fetchPolyEvent(city, targetDate) {
-  const [year, month, day] = targetDate.split('-');
-  const slug = `highest-temperature-in-${city}-on-${MONTH_NAMES[+month - 1]}-${+day}-${year}`;
+// ── Polymarket (via backend proxy to avoid CORS) ───────────────────────────
+// Returns the markets array for a given city + date, or [] if not found.
+async function fetchPolyMarkets(city, targetDate) {
   try {
-    const res = await fetch(`https://gamma-api.polymarket.com/events?slug=${encodeURIComponent(slug)}`);
-    if (!res.ok) return null;
-    const events = await res.json();
-    return Array.isArray(events) && events.length > 0 ? events[0] : null;
+    const markets = await api('GET', `/polymarket-event?city=${encodeURIComponent(city)}&date=${targetDate}`);
+    return Array.isArray(markets) ? markets : [];
   } catch (_) {
-    return null;
+    return [];
   }
 }
 
@@ -229,13 +231,13 @@ async function loadComparison() {
     rows.forEach(r => { if (!byDate[r.target_date]) byDate[r.target_date] = r; });
     const targetDates = Object.keys(byDate).sort();
 
-    // Fetch all Polymarket events in parallel
-    const polyEvents = await Promise.all(targetDates.map(d => fetchPolyEvent(city, d)));
+    // Fetch all Polymarket markets in parallel via backend proxy
+    const polyMarkets = await Promise.all(targetDates.map(d => fetchPolyMarkets(city, d)));
 
     _combined = targetDates.map((d, i) => ({
-      date:  d,
-      nbm:   byDate[d],
-      event: polyEvents[i] || null,
+      date:    d,
+      nbm:     byDate[d],
+      markets: polyMarkets[i] || [],
     }));
 
     loadingEl.classList.add('d-none');
@@ -279,9 +281,8 @@ function renderResults() {
   chartSel.innerHTML  = '';
 
   _combined.forEach(entry => {
-    const { date, nbm, event } = entry;
+    const { date, nbm, markets } = entry;
     const members = (nbm.member_temps && nbm.member_temps.length) ? nbm.member_temps : null;
-    const markets = (event && Array.isArray(event.markets)) ? event.markets : [];
 
     // Compute one row per market (bracket)
     const rows = markets.map(mkt => {
@@ -362,9 +363,8 @@ function renderChart(selectedDate) {
   const entry = _combined.find(c => c.date === selectedDate);
   if (!entry) return;
 
-  const { nbm, event } = entry;
+  const { nbm, markets } = entry;
   const members = (nbm.member_temps && nbm.member_temps.length) ? nbm.member_temps : null;
-  const markets = (event && Array.isArray(event.markets)) ? event.markets : [];
 
   const labels  = [];
   const pmData  = [];
