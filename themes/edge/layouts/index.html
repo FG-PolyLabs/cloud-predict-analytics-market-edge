@@ -182,6 +182,15 @@ function fitProb(bracket, mu, sigma, skewness) {
   return null;
 }
 
+// Sort key for ordering brackets low → high temperature
+function bracketSortKey(bracket) {
+  if (!bracket) return 0;
+  if (bracket.type === 'below') return bracket.hi - 0.001;  // just before ranges starting at hi
+  if (bracket.type === 'range') return bracket.lo;
+  if (bracket.type === 'above') return bracket.lo + 10000;  // always last
+  return 0;
+}
+
 // Count members matching the bracket. Returns { count, n, pct } or null.
 function nbmProb(members, bracket) {
   if (!members || !members.length || !bracket) return null;
@@ -334,10 +343,17 @@ function renderResults() {
     const { date, nbm, markets } = entry;
     const members = (nbm.member_temps && nbm.member_temps.length) ? nbm.member_temps : null;
 
-    // Compute one row per market (bracket)
-    const rows = markets.map(mkt => {
+    // Sort markets low → high temperature then compute one row per bracket
+    const sortedMarkets = [...markets].sort((a, b) => {
+      const ba = parseBracket(a.question || a.title || '');
+      const bb = parseBracket(b.question || b.title || '');
+      return bracketSortKey(ba) - bracketSortKey(bb);
+    });
+
+    const rows = sortedMarkets.map(mkt => {
       const prices   = parseOutcomePrices(mkt);
       const yesPct   = prices ? parseFloat(prices[0]) * 100 : null;
+      const noPct    = prices && prices.length > 1 ? parseFloat(prices[1]) * 100 : null;
       const label    = mkt.question || mkt.title || '';
       const bracket  = parseBracket(label);
       const res      = nbmProb(members, bracket);
@@ -345,7 +361,7 @@ function renderResults() {
       const meteoEdge = (yesPct !== null && meteoPct !== null) ? meteoPct - yesPct : null;
       const fp       = fitProb(bracket, nbm.predicted_max_temp_c, nbm.temp_std_dev_c, nbm.skewness);
       const fitEdge  = (yesPct !== null && fp !== null) ? fp - yesPct : null;
-      return { label, yesPct, meteoPct, meteoCount: res ? res.count : null, meteoN: res ? res.n : null,
+      return { label, yesPct, noPct, meteoPct, meteoCount: res ? res.count : null, meteoN: res ? res.n : null,
                meteoEdge, fitPct: fp, fitEdge };
     });
 
@@ -365,15 +381,16 @@ function renderResults() {
     const tableBody = rows.length > 0
       ? rows.map(r => `
           <tr>
-            <td class="ps-3 text-wrap" style="max-width:300px">${escHtml(r.label)}</td>
+            <td class="ps-3 text-wrap" style="max-width:260px">${escHtml(r.label)}</td>
             <td class="text-end">${pct(r.yesPct)}</td>
+            <td class="text-end">${pct(r.noPct)}</td>
             <td class="text-end">${pct(r.meteoPct)}</td>
             <td class="text-end text-muted small">${r.meteoCount !== null ? r.meteoCount + '/' + r.meteoN : '—'}</td>
             <td class="text-center">${edgeBadge(r.meteoEdge)}</td>
             <td class="text-end">${pct(r.fitPct)}</td>
             <td class="text-center">${edgeBadge(r.fitEdge)}</td>
           </tr>`).join('')
-      : `<tr><td colspan="7" class="ps-3 py-2 text-muted fst-italic">No Polymarket markets found for this date.</td></tr>`;
+      : `<tr><td colspan="8" class="ps-3 py-2 text-muted fst-italic">No Polymarket markets found for this date.</td></tr>`;
 
     const nbmSummary =
       `\u03bc\u202f=\u202f${nbm.predicted_max_temp_c.toFixed(1)}\u00b0C` +
@@ -394,13 +411,14 @@ function renderResults() {
           <table class="table table-hover align-middle mb-0 small">
             <thead class="table-light">
               <tr>
-                <th class="ps-3">Bracket</th>
-                <th class="text-end">PM YES%</th>
-                <th class="text-end">Meteo%</th>
-                <th class="text-end text-muted">Members</th>
-                <th class="text-center">Meteo Raw Edge</th>
-                <th class="text-end">Fit%</th>
-                <th class="text-center">Fit Edge</th>
+                <th class="ps-3" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Temperature range from the Polymarket market">Bracket</th>
+                <th class="text-end" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Polymarket asking price for YES — the market&#39;s implied probability that the high temperature falls in this bracket">PM YES%</th>
+                <th class="text-end" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Polymarket asking price for NO — implied probability the high does NOT fall in this bracket (roughly 1 − YES%)">PM NO%</th>
+                <th class="text-end" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Empirical probability from 30 GFS ensemble members: fraction of members whose predicted high falls in this bracket">Meteo%</th>
+                <th class="text-end text-muted" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Number of ensemble members whose predicted high falls in this bracket, out of 30 total">Members</th>
+                <th class="text-center" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Meteo% minus PM YES%. Positive = model sees higher probability than the market implies (potential YES value). Negative = market overprices this outcome (potential NO value).">Meteo Raw Edge</th>
+                <th class="text-end" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Skew-normal probability fitted to the ensemble mean, std dev, and skewness. A smooth estimate that works even when few members fall in a bracket.">Fit%</th>
+                <th class="text-center" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Fit% minus PM YES%. Edge using the analytical skew-normal estimate rather than the raw member count.">Fit Edge</th>
               </tr>
             </thead>
             <tbody>${tableBody}</tbody>
@@ -415,6 +433,11 @@ function renderResults() {
     chartCard.classList.remove('d-none');
     renderChart(_combined[0].date);
   }
+
+  // Initialise Bootstrap tooltips on all column headers
+  resultsEl.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
+    new bootstrap.Tooltip(el, { trigger: 'hover' });
+  });
 }
 
 function renderChart(selectedDate) {
@@ -429,7 +452,13 @@ function renderChart(selectedDate) {
   const meteoData = [];
   const fitData  = [];
 
-  markets.forEach(mkt => {
+  const sortedForChart = [...markets].sort((a, b) => {
+    const ba = parseBracket(a.question || a.title || '');
+    const bb = parseBracket(b.question || b.title || '');
+    return bracketSortKey(ba) - bracketSortKey(bb);
+  });
+
+  sortedForChart.forEach(mkt => {
     const prices  = parseOutcomePrices(mkt);
     const yesPct  = prices ? parseFloat(prices[0]) * 100 : null;
     const label   = mkt.question || mkt.title || '';
