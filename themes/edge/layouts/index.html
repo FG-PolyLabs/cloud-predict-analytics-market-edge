@@ -124,32 +124,36 @@ function parseBracket(text) {
   if (!text) return null;
   const t = text.replace(/\u2013|\u2014/g, '-'); // normalize en-dash / em-dash
 
-  // "X-Y°F" range → actual [X-0.5, Y+0.5)°F
-  let m = t.match(/(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)\s*°?\s*[Ff]/);
+  // ── °F ranges ──────────────────────────────────────────────────────────────
+  // "X-Y°F" / "X°F-Y°F" / "X to Y°F" / "X°F to Y°F"
+  let m = t.match(/(\d+(?:\.\d+)?)\s*(?:°\s*[Ff])?\s*(?:-|to)\s*(\d+(?:\.\d+)?)\s*°?\s*[Ff]/i);
   if (m) return { type: 'range', lo: (+m[1] - 0.5 - 32) * 5/9, hi: (+m[2] + 0.5 - 32) * 5/9, unit: 'F' };
 
-  // "X-Y°C" range → actual [X-0.5, Y+0.5)°C
-  m = t.match(/(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)\s*°?\s*[Cc]/);
+  // ── °C ranges ──────────────────────────────────────────────────────────────
+  // "X-Y°C" / "X°C-Y°C" / "X to Y°C" / "X°C to Y°C"
+  m = t.match(/(\d+(?:\.\d+)?)\s*(?:°\s*[Cc])?\s*(?:-|to)\s*(\d+(?:\.\d+)?)\s*°?\s*[Cc]/i);
   if (m) return { type: 'range', lo: +m[1] - 0.5, hi: +m[2] + 0.5, unit: 'C' };
 
-  // "above X°F" / "over X°F" / "X°F or higher" / "X°F or above" → actual [X-0.5, ∞)°F
-  m = t.match(/(?:above|over)\s+(\d+(?:\.\d+)?)\s*°?\s*[Ff]/i)
-   || t.match(/(\d+(?:\.\d+)?)\s*°?\s*[Ff]\s+or\s+(?:higher|above)/i);
+  // ── °F above ───────────────────────────────────────────────────────────────
+  // "above/over/greater than/more than X°F" / "X°F or higher/above/more/greater"
+  m = t.match(/(?:above|over|greater\s+than|more\s+than)\s+(\d+(?:\.\d+)?)\s*°?\s*[Ff]/i)
+   || t.match(/(\d+(?:\.\d+)?)\s*°?\s*[Ff]\s+or\s+(?:higher|above|more|greater)/i);
   if (m) return { type: 'above', lo: (+m[1] - 0.5 - 32) * 5/9, unit: 'F' };
 
-  // "above X°C" / "over X°C" / "X°C or higher" / "X°C or above"
-  m = t.match(/(?:above|over)\s+(\d+(?:\.\d+)?)\s*°?\s*[Cc]/i)
-   || t.match(/(\d+(?:\.\d+)?)\s*°?\s*[Cc]\s+or\s+(?:higher|above)/i);
+  // ── °C above ───────────────────────────────────────────────────────────────
+  m = t.match(/(?:above|over|greater\s+than|more\s+than)\s+(\d+(?:\.\d+)?)\s*°?\s*[Cc]/i)
+   || t.match(/(\d+(?:\.\d+)?)\s*°?\s*[Cc]\s+or\s+(?:higher|above|more|greater)/i);
   if (m) return { type: 'above', lo: +m[1] - 0.5, unit: 'C' };
 
-  // "below X°F" / "under X°F" / "X°F or below" / "X°F or lower" → actual (-∞, X+0.5)°F
-  m = t.match(/(?:below|under)\s+(\d+(?:\.\d+)?)\s*°?\s*[Ff]/i)
-   || t.match(/(\d+(?:\.\d+)?)\s*°?\s*[Ff]\s+or\s+(?:below|lower)/i);
+  // ── °F below ───────────────────────────────────────────────────────────────
+  // "below/under/less than X°F" / "X°F or lower/below/less"
+  m = t.match(/(?:below|under|less\s+than)\s+(\d+(?:\.\d+)?)\s*°?\s*[Ff]/i)
+   || t.match(/(\d+(?:\.\d+)?)\s*°?\s*[Ff]\s+or\s+(?:below|lower|less)/i);
   if (m) return { type: 'below', hi: (+m[1] + 0.5 - 32) * 5/9, unit: 'F' };
 
-  // "below X°C" / "under X°C" / "X°C or below" / "X°C or lower"
-  m = t.match(/(?:below|under)\s+(\d+(?:\.\d+)?)\s*°?\s*[Cc]/i)
-   || t.match(/(\d+(?:\.\d+)?)\s*°?\s*[Cc]\s+or\s+(?:below|lower)/i);
+  // ── °C below ───────────────────────────────────────────────────────────────
+  m = t.match(/(?:below|under|less\s+than)\s+(\d+(?:\.\d+)?)\s*°?\s*[Cc]/i)
+   || t.match(/(\d+(?:\.\d+)?)\s*°?\s*[Cc]\s+or\s+(?:below|lower|less)/i);
   if (m) return { type: 'below', hi: +m[1] + 0.5, unit: 'C' };
 
   return null;
@@ -422,7 +426,7 @@ function renderResults() {
       const pmUrl     = mktSlug
         ? `https://polymarket.com/event/${eventSlug}/${mktSlug}`
         : `https://polymarket.com/event/${eventSlug}`;
-      return { label, yesPct, noPct, meteoPct, meteoCount: res ? res.count : null, meteoN: res ? res.n : null,
+      return { label, bracket, yesPct, noPct, meteoPct, meteoCount: res ? res.count : null, meteoN: res ? res.n : null,
                meteoEdge, fitPct: fp, fitEdge, pmUrl };
     });
 
@@ -482,7 +486,17 @@ function renderResults() {
       </tr>` : '';
 
     const tableBody = rows.length > 0
-      ? rows.map(r => `
+      ? rows.map(r => {
+          const b = r.bracket;
+          const bracketRange = b
+            ? (() => {
+                const fmt = v => (toDisp(v)).toFixed(1) + unitStr;
+                if (b.type === 'range') return `${fmt(b.lo)} – ${fmt(b.hi)}`;
+                if (b.type === 'above') return `≥ ${fmt(b.lo)}`;
+                if (b.type === 'below') return `< ${fmt(b.hi)}`;
+              })()
+            : null;
+          return `
           <tr>
             <td class="ps-3 text-wrap" style="max-width:260px">
               ${escHtml(r.label)}
@@ -490,6 +504,9 @@ function renderResults() {
                  class="ms-1 text-muted" title="View on Polymarket" style="font-size:.75em">
                 <i class="bi bi-box-arrow-up-right"></i>
               </a>
+              ${bracketRange
+                ? `<div class="text-muted" style="font-size:.72em">${escHtml(bracketRange)}</div>`
+                : `<div class="text-danger" style="font-size:.72em">bracket not parsed</div>`}
             </td>
             <td class="text-end">${pct(r.yesPct)}</td>
             <td class="text-end">${pct(r.noPct)}</td>
@@ -498,7 +515,8 @@ function renderResults() {
             <td class="text-center">${edgeBadge(r.meteoEdge)}</td>
             <td class="text-end">${pct(r.fitPct)}</td>
             <td class="text-center">${edgeBadge(r.fitEdge)}</td>
-          </tr>`).join('') + unaccountedRow
+          </tr>`;
+        }).join('') + unaccountedRow
       : `<tr><td colspan="8" class="ps-3 py-2 text-muted fst-italic">No Polymarket markets found for this date.</td></tr>`;
 
     const nbmSummary =
