@@ -132,6 +132,56 @@ function parseBracket(text) {
   return null;
 }
 
+// ── Analytical (skew-normal) probability ──────────────────────────────────
+// Open-Meteo returns 30 raw member temps; our Go job pre-computes mean/σ/skew
+// from those members and stores them in BQ. We use them here to fit a
+// skew-normal distribution and get a smooth bracket probability estimate.
+
+function normalCDF(z) {
+  const t = 1 / (1 + 0.2316419 * Math.abs(z));
+  const d = 0.3989422820 * Math.exp(-z * z / 2);
+  const p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.7814779 + t * (-1.8212560 + t * 1.3302744))));
+  return z >= 0 ? 1 - p : p;
+}
+
+// Owen's T via 6-point Gauss-Legendre on [0,1]:
+// T(h,a) = (a/2π) ∫₀¹ exp(-h²(1+a²u²)/2) / (1+a²u²) du
+const _GL6N = [0.033765242898424, 0.169395306766868, 0.380690406977216,
+               0.619309593022784, 0.830604693233132, 0.966234757101576];
+const _GL6W = [0.085662246189585, 0.180380786524069, 0.233956967286346,
+               0.233956967286346, 0.180380786524069, 0.085662246189585];
+function owensT(h, a) {
+  if (a === 0) return 0;
+  const h2 = h * h, a2 = a * a;
+  let s = 0;
+  for (let i = 0; i < 6; i++) {
+    const u = _GL6N[i], d = 1 + a2 * u * u;
+    s += _GL6W[i] * Math.exp(-h2 * d / 2) / d;
+  }
+  return a * s / (2 * Math.PI);
+}
+
+// Convert 3rd standardized moment γ to skew-normal shape parameter α
+function skewnessToAlpha(gamma) {
+  if (!isFinite(gamma) || Math.abs(gamma) < 0.001) return 0;
+  const g = Math.max(-0.99, Math.min(0.99, gamma));
+  const r = Math.pow(Math.abs(g), 2 / 3);
+  const c = Math.pow((4 - Math.PI) / 2, 2 / 3);
+  const d = Math.sqrt((Math.PI / 2) * r / (r + c));
+  return (g >= 0 ? 1 : -1) * d / Math.sqrt(1 - d * d);
+}
+
+// P(bracket) from skew-normal SN(mu, sigma, alpha). Returns % or null.
+function fitProb(bracket, mu, sigma, skewness) {
+  if (!bracket || !isFinite(mu) || !isFinite(sigma) || sigma <= 0) return null;
+  const alpha = skewnessToAlpha(skewness || 0);
+  const cdf = x => normalCDF((x - mu) / sigma) - 2 * owensT((x - mu) / sigma, alpha);
+  if      (bracket.type === 'range') return Math.max(0, cdf(bracket.hi) - cdf(bracket.lo)) * 100;
+  else if (bracket.type === 'above') return Math.max(0, 1 - cdf(bracket.lo)) * 100;
+  else if (bracket.type === 'below') return Math.max(0, cdf(bracket.hi)) * 100;
+  return null;
+}
+
 // Count members matching the bracket. Returns { count, n, pct } or null.
 function nbmProb(members, bracket) {
   if (!members || !members.length || !bracket) return null;
@@ -286,14 +336,17 @@ function renderResults() {
 
     // Compute one row per market (bracket)
     const rows = markets.map(mkt => {
-      const prices  = parseOutcomePrices(mkt);
-      const yesPct  = prices ? parseFloat(prices[0]) * 100 : null;
-      const label   = mkt.question || mkt.title || '';
-      const bracket = parseBracket(label);
-      const res     = nbmProb(members, bracket);
-      const nbmPct  = res ? res.pct : null;
-      const edge    = (yesPct !== null && nbmPct !== null) ? nbmPct - yesPct : null;
-      return { label, yesPct, nbmPct, nbmCount: res ? res.count : null, nbmN: res ? res.n : null, edge };
+      const prices   = parseOutcomePrices(mkt);
+      const yesPct   = prices ? parseFloat(prices[0]) * 100 : null;
+      const label    = mkt.question || mkt.title || '';
+      const bracket  = parseBracket(label);
+      const res      = nbmProb(members, bracket);
+      const meteoPct = res ? res.pct : null;
+      const meteoEdge = (yesPct !== null && meteoPct !== null) ? meteoPct - yesPct : null;
+      const fp       = fitProb(bracket, nbm.predicted_max_temp_c, nbm.temp_std_dev_c, nbm.skewness);
+      const fitEdge  = (yesPct !== null && fp !== null) ? fp - yesPct : null;
+      return { label, yesPct, meteoPct, meteoCount: res ? res.count : null, meteoN: res ? res.n : null,
+               meteoEdge, fitPct: fp, fitEdge };
     });
 
     // Date label
@@ -308,16 +361,19 @@ function renderResults() {
     opt.textContent = `${dateLabel} (lead ${nbm.lead_days}d)`;
     chartSel.appendChild(opt);
 
+    const pct = v => v !== null ? v.toFixed(1) + '%' : '<span class="text-muted">—</span>';
     const tableBody = rows.length > 0
       ? rows.map(r => `
           <tr>
-            <td class="ps-3 text-wrap" style="max-width:360px">${escHtml(r.label)}</td>
-            <td class="text-end">${r.yesPct !== null ? r.yesPct.toFixed(1) + '%' : '<span class="text-muted">—</span>'}</td>
-            <td class="text-end">${r.nbmPct !== null ? r.nbmPct.toFixed(1) + '%' : '<span class="text-muted">—</span>'}</td>
-            <td class="text-center">${edgeBadge(r.edge)}</td>
-            <td class="text-end text-muted">${r.nbmCount !== null ? r.nbmCount + '/' + r.nbmN : '—'}</td>
+            <td class="ps-3 text-wrap" style="max-width:300px">${escHtml(r.label)}</td>
+            <td class="text-end">${pct(r.yesPct)}</td>
+            <td class="text-end">${pct(r.meteoPct)}</td>
+            <td class="text-end text-muted small">${r.meteoCount !== null ? r.meteoCount + '/' + r.meteoN : '—'}</td>
+            <td class="text-center">${edgeBadge(r.meteoEdge)}</td>
+            <td class="text-end">${pct(r.fitPct)}</td>
+            <td class="text-center">${edgeBadge(r.fitEdge)}</td>
           </tr>`).join('')
-      : `<tr><td colspan="5" class="ps-3 py-2 text-muted fst-italic">No Polymarket markets found for this date.</td></tr>`;
+      : `<tr><td colspan="7" class="ps-3 py-2 text-muted fst-italic">No Polymarket markets found for this date.</td></tr>`;
 
     const nbmSummary =
       `\u03bc\u202f=\u202f${nbm.predicted_max_temp_c.toFixed(1)}\u00b0C` +
@@ -341,8 +397,10 @@ function renderResults() {
                 <th class="ps-3">Bracket</th>
                 <th class="text-end">PM YES%</th>
                 <th class="text-end">Meteo%</th>
-                <th class="text-center">Edge</th>
                 <th class="text-end text-muted">Members</th>
+                <th class="text-center">Meteo Raw Edge</th>
+                <th class="text-end">Fit%</th>
+                <th class="text-center">Fit Edge</th>
               </tr>
             </thead>
             <tbody>${tableBody}</tbody>
@@ -366,9 +424,10 @@ function renderChart(selectedDate) {
   const { nbm, markets } = entry;
   const members = (nbm.member_temps && nbm.member_temps.length) ? nbm.member_temps : null;
 
-  const labels  = [];
-  const pmData  = [];
-  const nbmData = [];
+  const labels   = [];
+  const pmData   = [];
+  const meteoData = [];
+  const fitData  = [];
 
   markets.forEach(mkt => {
     const prices  = parseOutcomePrices(mkt);
@@ -376,11 +435,13 @@ function renderChart(selectedDate) {
     const label   = mkt.question || mkt.title || '';
     const bracket = parseBracket(label);
     const res     = nbmProb(members, bracket);
-    if (yesPct === null && !res) return;
+    const fp      = fitProb(bracket, nbm.predicted_max_temp_c, nbm.temp_std_dev_c, nbm.skewness);
+    if (yesPct === null && !res && fp === null) return;
 
     labels.push(shortLabel(label));
-    pmData.push(yesPct  !== null ? parseFloat(yesPct.toFixed(1))  : null);
-    nbmData.push(res    ? parseFloat(res.pct.toFixed(1))          : null);
+    pmData.push(yesPct !== null ? parseFloat(yesPct.toFixed(1)) : null);
+    meteoData.push(res ? parseFloat(res.pct.toFixed(1)) : null);
+    fitData.push(fp !== null ? parseFloat(fp.toFixed(1)) : null);
   });
 
   const subtitleEl = document.getElementById('chart-subtitle');
@@ -409,9 +470,17 @@ function renderChart(selectedDate) {
         },
         {
           label: 'Meteo%',
-          data: nbmData,
+          data: meteoData,
           backgroundColor: 'rgba(13,110,253,0.65)',
           borderColor:     'rgba(13,110,253,0.9)',
+          borderWidth: 1,
+          borderRadius: 3,
+        },
+        {
+          label: 'Fit% (skew-normal)',
+          data: fitData,
+          backgroundColor: 'rgba(25,135,84,0.65)',
+          borderColor:     'rgba(25,135,84,0.9)',
           borderWidth: 1,
           borderRadius: 3,
         },
