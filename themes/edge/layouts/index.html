@@ -426,8 +426,24 @@ function renderResults() {
       const pmUrl     = mktSlug
         ? `https://polymarket.com/event/${eventSlug}/${mktSlug}`
         : `https://polymarket.com/event/${eventSlug}`;
+      const noRoi = (meteoEdge !== null && meteoEdge < -5 && noPct !== null && meteoPct !== null)
+        ? (() => {
+            const pNoWins = 1 - meteoPct / 100;
+            const noCost  = noPct / 100;
+            const ev      = (1 - noCost) * pNoWins - noCost * (1 - pNoWins);
+            return { ev, roi: ev / noCost, noCost };
+          })()
+        : null;
+      const fitNoRoi = (fitEdge !== null && fitEdge < -5 && noPct !== null && fp !== null)
+        ? (() => {
+            const pNoWins = 1 - fp / 100;
+            const noCost  = noPct / 100;
+            const ev      = (1 - noCost) * pNoWins - noCost * (1 - pNoWins);
+            return { ev, roi: ev / noCost, noCost };
+          })()
+        : null;
       return { label, bracket, yesPct, noPct, meteoPct, meteoCount: res ? res.count : null, meteoN: res ? res.n : null,
-               meteoEdge, fitPct: fp, fitEdge, pmUrl };
+               meteoEdge, noRoi, fitPct: fp, fitEdge, fitNoRoi, pmUrl };
     });
 
     // Date label
@@ -482,7 +498,9 @@ function renderResults() {
         <td class="text-end text-muted small">${unaccounted}/${totalMembers}</td>
         <td class="text-center text-muted">—</td>
         <td class="text-end text-muted">—</td>
+        <td class="text-end text-muted">—</td>
         <td class="text-center text-muted">—</td>
+        <td class="text-end text-muted">—</td>
       </tr>` : '';
 
     const tableBody = rows.length > 0
@@ -513,11 +531,19 @@ function renderResults() {
             <td class="text-end">${pct(r.meteoPct)}</td>
             <td class="text-end text-muted small">${r.meteoCount !== null ? r.meteoCount + '/' + r.meteoN : '—'}</td>
             <td class="text-center">${edgeBadge(r.meteoEdge)}</td>
+            <td class="text-end">${r.noRoi !== null
+              ? `<div class="text-success small fw-medium">${(r.noRoi.roi * 100).toFixed(1)}%</div>
+                 <div class="text-muted" style="font-size:.75em">+${(r.noRoi.ev * 100).toFixed(1)}¢&thinsp;/&thinsp;${(r.noRoi.noCost * 100).toFixed(1)}¢</div>`
+              : '<span class="text-muted">—</span>'}</td>
             <td class="text-end">${pct(r.fitPct)}</td>
             <td class="text-center">${edgeBadge(r.fitEdge)}</td>
+            <td class="text-end">${r.fitNoRoi !== null
+              ? `<div class="text-success small fw-medium">${(r.fitNoRoi.roi * 100).toFixed(1)}%</div>
+                 <div class="text-muted" style="font-size:.75em">+${(r.fitNoRoi.ev * 100).toFixed(1)}¢&thinsp;/&thinsp;${(r.fitNoRoi.noCost * 100).toFixed(1)}¢</div>`
+              : '<span class="text-muted">—</span>'}</td>
           </tr>`;
         }).join('') + unaccountedRow
-      : `<tr><td colspan="8" class="ps-3 py-2 text-muted fst-italic">No Polymarket markets found for this date.</td></tr>`;
+      : `<tr><td colspan="10" class="ps-3 py-2 text-muted fst-italic">No Polymarket markets found for this date.</td></tr>`;
 
     const nbmSummary =
       `\u03bc\u202f=\u202f${toDisp(nbm.predicted_max_temp_c).toFixed(1)}${unitStr}` +
@@ -549,8 +575,10 @@ function renderResults() {
                 <th class="text-end" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Empirical probability from 30 GFS ensemble members: fraction of members whose predicted high falls in this bracket">Meteo Members%</th>
                 <th class="text-end text-muted" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Number of ensemble members whose predicted high falls in this bracket, out of 30 total">Members</th>
                 <th class="text-center" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Meteo Members% minus PM YES%. Positive = model sees higher probability than the market implies (potential YES value). Negative = market overprices this outcome (potential NO value).">Meteo Raw Edge</th>
+                <th class="text-end" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Expected ROI of buying No (raw members edge). Only shown when Meteo Raw Edge flags BET NO. Formula: EV = (1−noCost)×P(No wins) − noCost×P(Yes wins), where P(No wins) = 1 − Meteo Members%.">No ROI</th>
                 <th class="text-end" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Skew-normal probability fitted to the ensemble mean, std dev, and skewness. A smooth estimate that works even when few members fall in a bracket.">Meteo Fit%</th>
                 <th class="text-center" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Meteo Fit% minus PM YES%. Edge using the analytical skew-normal estimate rather than the raw member count.">Meteo Fit Edge</th>
+                <th class="text-end" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Expected ROI of buying No (fit edge). Only shown when Meteo Fit Edge flags BET NO. Same formula as No ROI (raw) but using the skew-normal fitted probability instead of the raw member count.">Fit No ROI</th>
               </tr>
             </thead>
             <tbody>${tableBody}</tbody>
