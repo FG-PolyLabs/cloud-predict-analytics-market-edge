@@ -405,14 +405,29 @@ function renderResults() {
     const pct = v => v !== null ? v.toFixed(1) + '%' : '<span class="text-muted">—</span>';
     // Members accounted for across all brackets; any remainder has no matching PM market
     const totalMembers = members ? members.length : 0;
-    const countedMembers = rows.reduce((sum, r) => sum + (r.meteoCount || 0), 0);
-    const unaccounted = totalMembers > 0 ? totalMembers - countedMembers : 0;
+    const parsedBrackets = rows.map(r => parseBracket(r.label));
+    const unaccountedTemps = members
+      ? members.filter(t => !parsedBrackets.some(b => {
+          if (!b) return false;
+          if (b.type === 'range') return t >= b.lo && t < b.hi;
+          if (b.type === 'above') return t >= b.lo;
+          if (b.type === 'below') return t < b.hi;
+          return false;
+        }))
+      : [];
+    const unaccounted = unaccountedTemps.length;
+
+    // Sort and format unaccounted temps as °F for readability
+    const unaccountedF = [...unaccountedTemps]
+      .sort((a, b) => a - b)
+      .map(t => (t * 9 / 5 + 32).toFixed(1) + '°F')
+      .join(', ');
 
     const unaccountedRow = (unaccounted > 0 && totalMembers > 0) ? `
       <tr class="table-warning">
-        <td class="ps-3 text-wrap fst-italic text-muted" style="max-width:260px"
-            title="These members predict a temperature that falls outside all listed Polymarket brackets for this date.">
-          Outside all PM brackets
+        <td class="ps-3 text-wrap fst-italic" style="max-width:260px">
+          <span class="text-muted">Outside all PM brackets</span>
+          <div class="text-muted" style="font-size:.78em;word-break:break-word">${escHtml(unaccountedF)}</div>
         </td>
         <td class="text-end text-muted">—</td>
         <td class="text-end text-muted">—</td>
