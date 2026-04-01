@@ -194,11 +194,21 @@ function skewnessToAlpha(gamma) {
   return (g >= 0 ? 1 : -1) * d / Math.sqrt(1 - d * d);
 }
 
-// P(bracket) from skew-normal SN(mu, sigma, alpha). Returns % or null.
+// P(bracket) from skew-normal fitted to the ensemble. Returns % or null.
+//
+// mu and sigma are the sample mean and std dev (NOT the SN location/scale params).
+// For SN(xi, omega, alpha): mean = xi + omega*delta*sqrt(2/pi)
+//                           std  = omega * sqrt(1 - 2*delta^2/pi)
+// We back-calculate xi and omega so the distribution matches the sample statistics.
 function fitProb(bracket, mu, sigma, skewness) {
   if (!bracket || !isFinite(mu) || !isFinite(sigma) || sigma <= 0) return null;
-  const alpha = skewnessToAlpha(skewness || 0);
-  const cdf = x => normalCDF((x - mu) / sigma) - 2 * owensT((x - mu) / sigma, alpha);
+  const alpha      = skewnessToAlpha(skewness || 0);
+  const delta      = alpha / Math.sqrt(1 + alpha * alpha);
+  const meanFactor = delta * Math.sqrt(2 / Math.PI);           // E[(X-xi)/omega]
+  const varFactor  = Math.sqrt(1 - meanFactor * meanFactor);   // Std[(X-xi)/omega]
+  const omega      = varFactor > 1e-9 ? sigma / varFactor : sigma;
+  const xi         = mu - omega * meanFactor;
+  const cdf = x => normalCDF((x - xi) / omega) - 2 * owensT((x - xi) / omega, alpha);
   if      (bracket.type === 'range') return Math.max(0, cdf(bracket.hi) - cdf(bracket.lo)) * 100;
   else if (bracket.type === 'above') return Math.max(0, 1 - cdf(bracket.lo)) * 100;
   else if (bracket.type === 'below') return Math.max(0, cdf(bracket.hi)) * 100;
@@ -237,8 +247,27 @@ async function fetchPolyMarkets(city, targetDate) {
   }
 }
 
-// outcomePrices is sometimes a JSON-serialized string in the Gamma API.
+// Returns [yesPrice, noPrice] as numeric strings.
+// Prefers the `tokens` field (actual ask prices per outcome, sum > 1 due to spread).
+// Falls back to `outcomePrices` (mid prices, sum ≈ 1) if tokens unavailable.
 function parseOutcomePrices(market) {
+  // tokens: "[{"outcome":"Yes","price":0.25,...},{"outcome":"No","price":0.80,...}]"
+  let tokens = market.tokens;
+  if (typeof tokens === 'string') {
+    try { tokens = JSON.parse(tokens); } catch (_) { tokens = null; }
+  }
+  if (Array.isArray(tokens) && tokens.length >= 2) {
+    const yes = tokens.find(t => /yes/i.test(t.outcome || ''));
+    const no  = tokens.find(t => /no/i.test(t.outcome || ''));
+    if (yes?.price != null && no?.price != null) {
+      return [String(yes.price), String(no.price)];
+    }
+    // positional fallback if outcome names aren't standard Yes/No
+    if (tokens[0]?.price != null && tokens[1]?.price != null) {
+      return [String(tokens[0].price), String(tokens[1].price)];
+    }
+  }
+  // Fall back to outcomePrices (mid prices)
   let prices = market.outcomePrices;
   if (typeof prices === 'string') {
     try { prices = JSON.parse(prices); } catch (_) { return null; }
