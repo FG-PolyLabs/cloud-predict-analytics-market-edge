@@ -327,22 +327,22 @@ let _combined = [];
 const COLS = [
   { key: 'pm-yes',         label: 'PM YES%',            group: 'Polymarket', on: true  },
   { key: 'pm-no',          label: 'PM NO%',             group: 'Polymarket', on: true  },
-  { key: 'gfs-pct',        label: 'GFS Members%',       group: 'GFS',        on: false },
+  { key: 'gfs-pct',        label: 'GFS Members%',       group: 'GFS',        on: true  },
   { key: 'gfs-count',      label: 'GFS Count',          group: 'GFS',        on: false },
   { key: 'gfs-members',    label: 'GFS Member Temps',   group: 'GFS',        on: false },
   { key: 'gfs-edge',       label: 'GFS Raw Edge',       group: 'GFS',        on: true  },
   { key: 'gfs-roi',        label: 'GFS ROI',            group: 'GFS',        on: true  },
-  { key: 'gfs-fit-pct',    label: 'GFS Fit%',           group: 'GFS Fit',    on: false },
-  { key: 'gfs-fit-edge',   label: 'GFS Fit Edge',       group: 'GFS Fit',    on: false },
-  { key: 'gfs-fit-roi',    label: 'GFS Fit ROI',        group: 'GFS Fit',    on: false },
-  { key: 'ecmwf-pct',      label: 'ECMWF Members%',     group: 'ECMWF',      on: false },
+  { key: 'gfs-fit-pct',    label: 'GFS Fit%',           group: 'GFS Fit',    on: true  },
+  { key: 'gfs-fit-edge',   label: 'GFS Fit Edge',       group: 'GFS Fit',    on: true  },
+  { key: 'gfs-fit-roi',    label: 'GFS Fit ROI',        group: 'GFS Fit',    on: true  },
+  { key: 'ecmwf-pct',      label: 'ECMWF Members%',     group: 'ECMWF',      on: true  },
   { key: 'ecmwf-count',    label: 'ECMWF Count',        group: 'ECMWF',      on: false },
   { key: 'ecmwf-members',  label: 'ECMWF Member Temps', group: 'ECMWF',      on: false },
-  { key: 'ecmwf-edge',     label: 'ECMWF Raw Edge',     group: 'ECMWF',      on: false },
-  { key: 'ecmwf-roi',      label: 'ECMWF ROI',          group: 'ECMWF',      on: false },
-  { key: 'ecmwf-fit-pct',  label: 'ECMWF Fit%',         group: 'ECMWF Fit',  on: false },
-  { key: 'ecmwf-fit-edge', label: 'ECMWF Fit Edge',     group: 'ECMWF Fit',  on: false },
-  { key: 'ecmwf-fit-roi',  label: 'ECMWF Fit ROI',      group: 'ECMWF Fit',  on: false },
+  { key: 'ecmwf-edge',     label: 'ECMWF Raw Edge',     group: 'ECMWF',      on: true  },
+  { key: 'ecmwf-roi',      label: 'ECMWF ROI',          group: 'ECMWF',      on: true  },
+  { key: 'ecmwf-fit-pct',  label: 'ECMWF Fit%',         group: 'ECMWF Fit',  on: true  },
+  { key: 'ecmwf-fit-edge', label: 'ECMWF Fit Edge',     group: 'ECMWF Fit',  on: true  },
+  { key: 'ecmwf-fit-roi',  label: 'ECMWF Fit ROI',      group: 'ECMWF Fit',  on: true  },
 ];
 
 function applyColumnVisibility() {
@@ -435,11 +435,17 @@ function escHtml(str) {
 
 // Extract just the temperature bracket portion for short chart labels.
 function shortLabel(question) {
-  const m = question.match(
-    /(\d+(?:\.\d+)?\s*[-\u2013\u2014]\s*\d+(?:\.\d+)?\s*°?[CFcf]|(?:above|below|over|under)\s+\d+(?:\.\d+)?\s*°?[CFcf])/i
-  );
+  const t = question.replace(/\u2013|\u2014/g, '-');
+  // "X-Y°F/C"
+  let m = t.match(/(\d+(?:\.\d+)?\s*-\s*\d+(?:\.\d+)?\s*°?\s*[CFcf])/i);
   if (m) return m[1];
-  return question.length > 36 ? question.slice(0, 34) + '\u2026' : question;
+  // "above/below/over/under X°F/C"
+  m = t.match(/((?:above|below|over|under|higher\s+than|lower\s+than|greater\s+than|less\s+than)\s+\d+(?:\.\d+)?\s*°?\s*[CFcf])/i);
+  if (m) return m[1];
+  // "X°F/C or above/below/higher/lower/more/less"
+  m = t.match(/(\d+(?:\.\d+)?\s*°?\s*[CFcf]\s+or\s+(?:above|below|higher|lower|more|less|greater))/i);
+  if (m) return m[1];
+  return t.length > 36 ? t.slice(0, 34) + '\u2026' : t;
 }
 
 function renderResults() {
@@ -621,15 +627,13 @@ function renderResults() {
             : null;
           return `
           <tr>
-            <td class="ps-3 text-wrap" style="max-width:260px">
-              ${escHtml(r.label)}
+            <td class="ps-3" style="white-space:nowrap">
+              <span title="${escHtml(r.label)}">${escHtml(shortLabel(r.label))}</span>
               <a href="${escHtml(r.pmUrl)}" target="_blank" rel="noopener"
                  class="ms-1 text-muted" title="View on Polymarket" style="font-size:.75em">
                 <i class="bi bi-box-arrow-up-right"></i>
               </a>
-              ${bracketRange
-                ? `<div class="text-muted" style="font-size:.72em">${escHtml(bracketRange)}</div>`
-                : `<div class="text-danger" style="font-size:.72em">bracket not parsed</div>`}
+              ${!bracketRange ? `<div class="text-danger" style="font-size:.72em">bracket not parsed</div>` : ''}
             </td>
             <td class="text-end col-pm-yes">${pct(r.yesPct)}</td>
             <td class="text-end col-pm-no">${pct(r.noPct)}</td>
