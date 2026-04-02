@@ -63,6 +63,11 @@
                 onchange="onRunChange()"></select>
       </div>
       <div class="col-sm-auto">
+        <label class="form-label small fw-medium mb-1" for="sel-icon-run">ICON Run</label>
+        <select class="form-select form-select-sm" id="sel-icon-run" style="min-width:200px"
+                onchange="onRunChange()"></select>
+      </div>
+      <div class="col-sm-auto">
         <label class="form-label small fw-medium mb-1">PM Source</label>
         <div class="btn-group btn-group-sm" role="group">
           <input type="radio" class="btn-check" name="pm-source" id="pm-src-bq"
@@ -84,7 +89,7 @@
 <!-- Loading -->
 <div id="loading" class="text-center py-5 d-none">
   <div class="spinner-border text-primary" role="status"></div>
-  <p class="text-muted small mt-2">Fetching GFS + ECMWF + Polymarket data…</p>
+  <p class="text-muted small mt-2">Fetching GFS + ECMWF + ICON + Polymarket data…</p>
 </div>
 
 <!-- Empty state -->
@@ -361,6 +366,7 @@ let _combined = [];
 let pmFetchedAt = null;
 let allGfsRows   = [];   // all rows returned for the selected forecast_date
 let allEcmwfRows = [];
+let allIconRows  = [];
 
 // Format an ISO timestamp as "YYYY-MM-DD HH:MM UTC"
 function fmtUTC(iso) {
@@ -462,6 +468,14 @@ const COLS = [
   { key: 'ecmwf-fit-pct',  label: 'ECMWF Fit%',         group: 'ECMWF Fit',  on: true  },
   { key: 'ecmwf-fit-edge', label: 'ECMWF Fit Edge',     group: 'ECMWF Fit',  on: true  },
   { key: 'ecmwf-fit-roi',  label: 'ECMWF Fit ROI',      group: 'ECMWF Fit',  on: true  },
+  { key: 'icon-pct',       label: 'ICON Members%',       group: 'ICON',       on: true  },
+  { key: 'icon-count',     label: 'ICON Count',          group: 'ICON',       on: false },
+  { key: 'icon-members',   label: 'ICON Member Temps',   group: 'ICON',       on: false },
+  { key: 'icon-edge',      label: 'ICON Raw Edge',        group: 'ICON',       on: true  },
+  { key: 'icon-roi',       label: 'ICON ROI',             group: 'ICON',       on: true  },
+  { key: 'icon-fit-pct',   label: 'ICON Fit%',            group: 'ICON Fit',   on: true  },
+  { key: 'icon-fit-edge',  label: 'ICON Fit Edge',        group: 'ICON Fit',   on: true  },
+  { key: 'icon-fit-roi',   label: 'ICON Fit ROI',         group: 'ICON Fit',   on: true  },
 ];
 
 function applyColumnVisibility() {
@@ -493,10 +507,11 @@ async function loadComparison() {
     const params = { city };
     if (forecastDate) params.forecast_date = forecastDate;
 
-    // Fetch ALL GFS and ECMWF rows for the day (multiple model runs included)
-    const [gfsRows, ecmwfRows] = await Promise.all([
+    // Fetch ALL GFS, ECMWF, and ICON rows for the day (multiple model runs included)
+    const [gfsRows, ecmwfRows, iconRows] = await Promise.all([
       api('GET', '/meteo-gfs-forecasts' + qs(params)),
       api('GET', '/meteo-ecmwf-forecasts' + qs(params)).catch(() => []),
+      api('GET', '/meteo-icon-forecasts' + qs(params)).catch(() => []),
     ]);
 
     if (!gfsRows || gfsRows.length === 0) {
@@ -508,10 +523,12 @@ async function loadComparison() {
 
     allGfsRows   = gfsRows;
     allEcmwfRows = ecmwfRows || [];
+    allIconRows  = iconRows  || [];
 
     // Populate run selectors (latest first = default)
     populateRunSelector('sel-gfs-run',   distinctRuns(allGfsRows));
     populateRunSelector('sel-ecmwf-run', distinctRuns(allEcmwfRows));
+    populateRunSelector('sel-icon-run',  distinctRuns(allIconRows));
     runSelectorsRow.classList.remove('d-none');
 
     loadingEl.classList.add('d-none');
@@ -526,6 +543,7 @@ async function renderWithCurrentSelections() {
   const city      = document.getElementById('sel-city').value;
   const gfsRun    = document.getElementById('sel-gfs-run').value;
   const ecmwfRun  = document.getElementById('sel-ecmwf-run').value;
+  const iconRun   = document.getElementById('sel-icon-run').value;
   const pmSource  = document.querySelector('input[name="pm-source"]:checked')?.value || 'bq';
 
   const loadingEl = document.getElementById('loading');
@@ -541,12 +559,15 @@ async function renderWithCurrentSelections() {
   // Filter rows to the selected model run
   const gfsFiltered   = allGfsRows.filter(r => r.model_run_at === gfsRun);
   const ecmwfFiltered = allEcmwfRows.filter(r => r.model_run_at === ecmwfRun);
+  const iconFiltered  = allIconRows.filter(r => r.model_run_at === iconRun);
 
   // One row per target_date for each model
   const gfsByDate = {};
   gfsFiltered.forEach(r => { if (!gfsByDate[r.target_date]) gfsByDate[r.target_date] = r; });
   const ecmwfByDate = {};
   ecmwfFiltered.forEach(r => { if (!ecmwfByDate[r.target_date]) ecmwfByDate[r.target_date] = r; });
+  const iconByDate = {};
+  iconFiltered.forEach(r => { if (!iconByDate[r.target_date]) iconByDate[r.target_date] = r; });
   const targetDates = Object.keys(gfsByDate).sort();
 
   // Fetch live market structure (question text + slugs) for every target date
@@ -577,6 +598,7 @@ async function renderWithCurrentSelections() {
       date:        d,
       gfs:         gfsByDate[d],
       ecmwf:       ecmwfByDate[d] || null,
+      icon:        iconByDate[d]  || null,
       markets,
       pmTimestamp: pmTs,
       pmSource,
@@ -644,9 +666,10 @@ function renderResults() {
   const cityObj  = CITIES.find(c => c.slug === citySlug);
 
   _combined.forEach(entry => {
-    const { date, gfs, ecmwf, markets } = entry; // pmTimestamp and pmSource read directly from entry below
+    const { date, gfs, ecmwf, icon, markets } = entry; // pmTimestamp and pmSource read directly from entry below
     const members = (gfs.member_temps && gfs.member_temps.length) ? gfs.member_temps : null;
     const ecmwfMembers = (ecmwf && ecmwf.member_temps && ecmwf.member_temps.length) ? ecmwf.member_temps : null;
+    const iconMembers  = (icon && icon.member_temps && icon.member_temps.length) ? icon.member_temps : null;
 
     // Sort markets low → high temperature then compute one row per bracket
     const sortedMarkets = [...markets].sort((a, b) => {
@@ -674,6 +697,12 @@ function renderResults() {
       const ecmwfEdge  = (yesPct !== null && ecmwfPct !== null) ? ecmwfPct - yesPct : null;
       const ecmwfFp    = ecmwf ? fitProb(bracket, ecmwf.predicted_max_temp_c, ecmwf.temp_std_dev_c, ecmwf.skewness) : null;
       const ecmwfFitEdge = (yesPct !== null && ecmwfFp !== null) ? ecmwfFp - yesPct : null;
+      // ICON
+      const icRes      = nbmProb(iconMembers, bracket);
+      const iconPct    = icRes ? icRes.pct : null;
+      const iconEdge   = (yesPct !== null && iconPct !== null) ? iconPct - yesPct : null;
+      const iconFp     = icon ? fitProb(bracket, icon.predicted_max_temp_c, icon.temp_std_dev_c, icon.skewness) : null;
+      const iconFitEdge = (yesPct !== null && iconFp !== null) ? iconFp - yesPct : null;
       // Polymarket market URL — deep-link to specific market if slug available, else event page
       const mktSlug   = mkt.slug || null;
       const pmUrl     = mktSlug
@@ -719,6 +748,21 @@ function renderResults() {
         ? (() => { const pNoWins = 1 - ecmwfFp / 100, noCost = noPct / 100, ev = (1 - noCost) * pNoWins - noCost * (1 - pNoWins); return { ev, roi: ev / noCost, noCost, side: 'no' }; })()
         : null;
       const ecFitRoi = ecFitYesRoi || ecFitNoRoi || null;
+      // ICON ROI
+      const icYesRoi = (iconEdge !== null && iconEdge > 5 && yesPct !== null && iconPct !== null)
+        ? (() => { const pYesWins = iconPct / 100, yesCost = yesPct / 100, ev = (1 - yesCost) * pYesWins - yesCost * (1 - pYesWins); return { ev, roi: ev / yesCost, yesCost, side: 'yes' }; })()
+        : null;
+      const icNoRoi = (iconEdge !== null && iconEdge < -5 && noPct !== null && iconPct !== null)
+        ? (() => { const pNoWins = 1 - iconPct / 100, noCost = noPct / 100, ev = (1 - noCost) * pNoWins - noCost * (1 - pNoWins); return { ev, roi: ev / noCost, noCost, side: 'no' }; })()
+        : null;
+      const icRawRoi = icYesRoi || icNoRoi || null;
+      const icFitYesRoi = (iconFitEdge !== null && iconFitEdge > 5 && yesPct !== null && iconFp !== null)
+        ? (() => { const pYesWins = iconFp / 100, yesCost = yesPct / 100, ev = (1 - yesCost) * pYesWins - yesCost * (1 - pYesWins); return { ev, roi: ev / yesCost, yesCost, side: 'yes' }; })()
+        : null;
+      const icFitNoRoi = (iconFitEdge !== null && iconFitEdge < -5 && noPct !== null && iconFp !== null)
+        ? (() => { const pNoWins = 1 - iconFp / 100, noCost = noPct / 100, ev = (1 - noCost) * pNoWins - noCost * (1 - pNoWins); return { ev, roi: ev / noCost, noCost, side: 'no' }; })()
+        : null;
+      const icFitRoi = icFitYesRoi || icFitNoRoi || null;
       return { label, bracket, yesPct, noPct,
                meteoPct, meteoCount: res ? res.count : null, meteoN: res ? res.n : null, meteoEdge, rawRoi,
                matchGfsMembers,
@@ -726,6 +770,9 @@ function renderResults() {
                ecmwfPct, ecmwfCount: ecRes ? ecRes.count : null, ecmwfN: ecRes ? ecRes.n : null, ecmwfEdge, ecRawRoi,
                matchEcmwfMembers,
                ecmwfFitPct: ecmwfFp, ecmwfFitEdge, ecFitRoi,
+               iconPct, iconCount: icRes ? icRes.count : null, iconN: icRes ? icRes.n : null, iconEdge, icRawRoi,
+               matchIconMembers: (iconMembers && bracket) ? iconMembers.filter(memberFilter) : [],
+               iconFitPct: iconFp, iconFitEdge, icFitRoi,
                pmUrl };
     });
 
@@ -796,6 +843,14 @@ function renderResults() {
         <td class="text-end text-muted col-ecmwf-fit-pct">—</td>
         <td class="text-center text-muted col-ecmwf-fit-edge">—</td>
         <td class="text-end text-muted col-ecmwf-fit-roi">—</td>
+        <td class="text-end text-muted col-icon-pct">${(unaccounted / totalMembers * 100).toFixed(1)}%</td>
+        <td class="text-end text-muted small col-icon-count">—</td>
+        <td class="col-icon-members text-muted">—</td>
+        <td class="text-center text-muted col-icon-edge">—</td>
+        <td class="text-end text-muted col-icon-roi">—</td>
+        <td class="text-end text-muted col-icon-fit-pct">—</td>
+        <td class="text-center text-muted col-icon-fit-edge">—</td>
+        <td class="text-end text-muted col-icon-fit-roi">—</td>
       </tr>` : '';
 
     const tableBody = rows.length > 0
@@ -837,9 +892,17 @@ function renderResults() {
             <td class="text-end col-ecmwf-fit-pct">${pct(r.ecmwfFitPct)}</td>
             <td class="text-center col-ecmwf-fit-edge">${edgeBadge(r.ecmwfFitEdge)}</td>
             <td class="text-end col-ecmwf-fit-roi">${roiCell(r.ecFitRoi)}</td>
+            <td class="text-end col-icon-pct">${pct(r.iconPct)}</td>
+            <td class="text-end text-muted small col-icon-count">${r.iconCount !== null ? r.iconCount + '/' + r.iconN : '—'}</td>
+            <td class="col-icon-members" style="max-width:220px;white-space:normal"><span class="text-muted" style="font-size:.75em">${escHtml(fmtMembers(r.matchIconMembers))}</span></td>
+            <td class="text-center col-icon-edge">${edgeBadge(r.iconEdge)}</td>
+            <td class="text-end col-icon-roi">${roiCell(r.icRawRoi)}</td>
+            <td class="text-end col-icon-fit-pct">${pct(r.iconFitPct)}</td>
+            <td class="text-center col-icon-fit-edge">${edgeBadge(r.iconFitEdge)}</td>
+            <td class="text-end col-icon-fit-roi">${roiCell(r.icFitRoi)}</td>
           </tr>`;
         }).join('') + unaccountedRow
-      : `<tr><td colspan="19" class="ps-3 py-2 text-muted fst-italic">No Polymarket markets found for this date.</td></tr>`;
+      : `<tr><td colspan="27" class="ps-3 py-2 text-muted fst-italic">No Polymarket markets found for this date.</td></tr>`;
 
     const gfsSummary =
       `GFS\u2002\u03bc\u202f=\u202f${toDisp(gfs.predicted_max_temp_c).toFixed(1)}${unitStr}` +
@@ -852,12 +915,18 @@ function renderResults() {
         `\u2002\u03c3\u202f=\u202f${toDispDelta(ecmwf.temp_std_dev_c).toFixed(1)}${unitStr}` +
         `\u2002skew\u202f=\u202f${ecmwf.skewness.toFixed(2)}`
       : '';
+    const iconSummary = icon
+      ? `\u2003ICON\u2002\u03bc\u202f=\u202f${toDisp(icon.predicted_max_temp_c).toFixed(1)}${unitStr}` +
+        `\u2002\u03c3\u202f=\u202f${toDispDelta(icon.temp_std_dev_c).toFixed(1)}${unitStr}` +
+        `\u2002skew\u202f=\u202f${icon.skewness.toFixed(2)}`
+      : '';
     const pmLabel = entry.pmSource === 'bq'
       ? `PM prices (BQ): ${fmtUTC(entry.pmTimestamp)}`
       : `PM prices (live): ${fmtUTC(entry.pmTimestamp)}`;
     const timestampLine =
       `GFS run: ${fmtUTC(gfs.model_run_at)}` +
       (ecmwf ? `\u2003ECMWF run: ${fmtUTC(ecmwf.model_run_at)}` : '') +
+      (icon  ? `\u2003ICON run: ${fmtUTC(icon.model_run_at)}`   : '') +
       `\u2003${pmLabel}`;
 
     const section = document.createElement('div');
@@ -866,7 +935,7 @@ function renderResults() {
       <div class="card-header bg-transparent d-flex align-items-center gap-2 flex-wrap py-2">
         <span class="fw-medium">${escHtml(dateLabel)}</span>
         <span class="badge bg-secondary">lead ${gfs.lead_days}d</span>
-        <span class="text-muted small ms-auto">${escHtml(gfsSummary + ecmwfSummary)}</span>
+        <span class="text-muted small ms-auto">${escHtml(gfsSummary + ecmwfSummary + iconSummary)}</span>
         ${cityObj ? `<a href="${escHtml(openMeteoURL(cityObj))}" target="_blank" rel="noopener"
            class="text-muted small ms-2" title="View on Open-Meteo">
            <i class="bi bi-box-arrow-up-right"></i> Open-Meteo
@@ -897,6 +966,14 @@ function renderResults() {
                 <th class="text-end col-ecmwf-fit-pct" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Skew-normal probability fitted to ECMWF ensemble mean, std dev, and skewness.">ECMWF Fit%</th>
                 <th class="text-center col-ecmwf-fit-edge" data-bs-toggle="tooltip" data-bs-placement="bottom" title="ECMWF Fit% minus PM YES%. Edge using the analytical skew-normal estimate.">ECMWF Fit Edge</th>
                 <th class="text-end col-ecmwf-fit-roi" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Expected ROI using ECMWF skew-normal fitted probability.">ECMWF Fit ROI</th>
+                <th class="text-end col-icon-pct" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Empirical probability from DWD ICON seamless ensemble members: fraction of members whose predicted high falls in this bracket">ICON Members%</th>
+                <th class="text-end text-muted col-icon-count" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Number of ICON ensemble members in this bracket out of total">ICON Count</th>
+                <th class="col-icon-members" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Individual ICON ensemble member temperatures that fall in this bracket, sorted low to high">ICON Member Temps</th>
+                <th class="text-center col-icon-edge" data-bs-toggle="tooltip" data-bs-placement="bottom" title="ICON Members% minus PM YES%. Positive = model sees higher probability than market (potential YES value). Negative = potential NO value.">ICON Raw Edge</th>
+                <th class="text-end col-icon-roi" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Expected ROI of the suggested bet using ICON raw member probabilities.">ICON ROI</th>
+                <th class="text-end col-icon-fit-pct" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Skew-normal probability fitted to ICON ensemble mean, std dev, and skewness.">ICON Fit%</th>
+                <th class="text-center col-icon-fit-edge" data-bs-toggle="tooltip" data-bs-placement="bottom" title="ICON Fit% minus PM YES%. Edge using the analytical skew-normal estimate.">ICON Fit Edge</th>
+                <th class="text-end col-icon-fit-roi" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Expected ROI using ICON skew-normal fitted probability.">ICON Fit ROI</th>
               </tr>
             </thead>
             <tbody>${tableBody}</tbody>
@@ -923,16 +1000,19 @@ function renderChart(selectedDate) {
   const entry = _combined.find(c => c.date === selectedDate);
   if (!entry) return;
 
-  const { gfs, ecmwf, markets } = entry;
+  const { gfs, ecmwf, icon, markets } = entry;
   const members = (gfs.member_temps && gfs.member_temps.length) ? gfs.member_temps : null;
   const ecmwfMembers = (ecmwf && ecmwf.member_temps && ecmwf.member_temps.length) ? ecmwf.member_temps : null;
+  const iconMembers  = (icon && icon.member_temps && icon.member_temps.length) ? icon.member_temps : null;
 
-  const labels    = [];
-  const pmData    = [];
-  const gfsData   = [];
-  const fitData   = [];
-  const ecmwfData = [];
+  const labels       = [];
+  const pmData       = [];
+  const gfsData      = [];
+  const fitData      = [];
+  const ecmwfData    = [];
   const ecmwfFitData = [];
+  const iconData     = [];
+  const iconFitData  = [];
 
   const sortedForChart = [...markets].sort((a, b) => {
     const ba = parseBracket(a.question || a.title || '');
@@ -949,7 +1029,9 @@ function renderChart(selectedDate) {
     const fp      = fitProb(bracket, gfs.predicted_max_temp_c, gfs.temp_std_dev_c, gfs.skewness);
     const ecRes   = nbmProb(ecmwfMembers, bracket);
     const ecFp    = ecmwf ? fitProb(bracket, ecmwf.predicted_max_temp_c, ecmwf.temp_std_dev_c, ecmwf.skewness) : null;
-    if (yesPct === null && !res && fp === null && !ecRes && ecFp === null) return;
+    const icRes   = nbmProb(iconMembers, bracket);
+    const icFp    = icon  ? fitProb(bracket, icon.predicted_max_temp_c,  icon.temp_std_dev_c,  icon.skewness)  : null;
+    if (yesPct === null && !res && fp === null && !ecRes && ecFp === null && !icRes && icFp === null) return;
 
     labels.push(shortLabel(label));
     pmData.push(yesPct !== null ? parseFloat(yesPct.toFixed(1)) : null);
@@ -957,6 +1039,8 @@ function renderChart(selectedDate) {
     fitData.push(fp !== null ? parseFloat(fp.toFixed(1)) : null);
     ecmwfData.push(ecRes ? parseFloat(ecRes.pct.toFixed(1)) : null);
     ecmwfFitData.push(ecFp !== null ? parseFloat(ecFp.toFixed(1)) : null);
+    iconData.push(icRes ? parseFloat(icRes.pct.toFixed(1)) : null);
+    iconFitData.push(icFp !== null ? parseFloat(icFp.toFixed(1)) : null);
   });
 
   const subtitleEl = document.getElementById('chart-subtitle');
@@ -972,7 +1056,8 @@ function renderChart(selectedDate) {
   const chartUnitStr = chartUnit === 'F' ? '°F' : '°C';
   subtitleEl.textContent =
     `lead ${gfs.lead_days}d \u2014 GFS \u03bc\u202f=\u202f${chartToDisp(gfs.predicted_max_temp_c).toFixed(1)}${chartUnitStr}` +
-    (ecmwf ? `\u2003ECMWF \u03bc\u202f=\u202f${chartToDisp(ecmwf.predicted_max_temp_c).toFixed(1)}${chartUnitStr}` : '');
+    (ecmwf ? `\u2003ECMWF \u03bc\u202f=\u202f${chartToDisp(ecmwf.predicted_max_temp_c).toFixed(1)}${chartUnitStr}` : '') +
+    (icon  ? `\u2003ICON \u03bc\u202f=\u202f${chartToDisp(icon.predicted_max_temp_c).toFixed(1)}${chartUnitStr}`  : '');
 
   if (edgeChart) edgeChart.destroy();
   edgeChart = new Chart(document.getElementById('edge-chart'), {
@@ -1017,6 +1102,22 @@ function renderChart(selectedDate) {
           data: ecmwfFitData,
           backgroundColor: 'rgba(214,51,132,0.65)',
           borderColor:     'rgba(214,51,132,0.9)',
+          borderWidth: 1,
+          borderRadius: 3,
+        },
+        {
+          label: 'ICON Members%',
+          data: iconData,
+          backgroundColor: 'rgba(13,202,240,0.65)',
+          borderColor:     'rgba(13,202,240,0.9)',
+          borderWidth: 1,
+          borderRadius: 3,
+        },
+        {
+          label: 'ICON Fit%',
+          data: iconFitData,
+          backgroundColor: 'rgba(32,201,151,0.65)',
+          borderColor:     'rgba(32,201,151,0.9)',
           borderWidth: 1,
           borderRadius: 3,
         },
