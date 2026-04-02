@@ -6,7 +6,7 @@
     <div class="card-body p-4">
       <i class="bi bi-graph-up-arrow fs-1 text-primary mb-3 d-block"></i>
       <h4 class="fw-semibold mb-1">Market Edge</h4>
-      <p class="text-muted small mb-4">NBM ensemble vs Polymarket price comparison</p>
+      <p class="text-muted small mb-4">GFS &amp; ECMWF ensemble vs Polymarket price comparison</p>
       <button class="btn btn-primary w-100" onclick="signInWithGoogle()">
         <i class="bi bi-google me-2"></i>Sign in with Google
       </button>
@@ -40,6 +40,15 @@
           <i class="bi bi-arrow-repeat me-1"></i>Load
         </button>
       </div>
+      <div class="col-sm-auto ms-sm-auto">
+        <div class="dropdown">
+          <button class="btn btn-outline-secondary btn-sm dropdown-toggle" type="button"
+                  data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false">
+            <i class="bi bi-layout-three-columns me-1"></i>Columns
+          </button>
+          <div class="dropdown-menu p-3" style="min-width:220px;max-height:420px;overflow-y:auto" id="col-filter-menu"></div>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -47,7 +56,7 @@
 <!-- Loading -->
 <div id="loading" class="text-center py-5 d-none">
   <div class="spinner-border text-primary" role="status"></div>
-  <p class="text-muted small mt-2">Fetching NBM + Polymarket data…</p>
+  <p class="text-muted small mt-2">Fetching GFS + ECMWF + Polymarket data…</p>
 </div>
 
 <!-- Empty state -->
@@ -314,6 +323,36 @@ firebase.auth().onAuthStateChanged(user => {
 let edgeChart = null;
 let _combined = [];
 
+// ── Column visibility ──────────────────────────────────────────────────────
+const COLS = [
+  { key: 'pm-yes',         label: 'PM YES%',            group: 'Polymarket', on: true  },
+  { key: 'pm-no',          label: 'PM NO%',             group: 'Polymarket', on: true  },
+  { key: 'gfs-pct',        label: 'GFS Members%',       group: 'GFS',        on: false },
+  { key: 'gfs-count',      label: 'GFS Count',          group: 'GFS',        on: false },
+  { key: 'gfs-members',    label: 'GFS Member Temps',   group: 'GFS',        on: false },
+  { key: 'gfs-edge',       label: 'GFS Raw Edge',       group: 'GFS',        on: true  },
+  { key: 'gfs-roi',        label: 'GFS ROI',            group: 'GFS',        on: true  },
+  { key: 'gfs-fit-pct',    label: 'GFS Fit%',           group: 'GFS Fit',    on: false },
+  { key: 'gfs-fit-edge',   label: 'GFS Fit Edge',       group: 'GFS Fit',    on: false },
+  { key: 'gfs-fit-roi',    label: 'GFS Fit ROI',        group: 'GFS Fit',    on: false },
+  { key: 'ecmwf-pct',      label: 'ECMWF Members%',     group: 'ECMWF',      on: false },
+  { key: 'ecmwf-count',    label: 'ECMWF Count',        group: 'ECMWF',      on: false },
+  { key: 'ecmwf-members',  label: 'ECMWF Member Temps', group: 'ECMWF',      on: false },
+  { key: 'ecmwf-edge',     label: 'ECMWF Raw Edge',     group: 'ECMWF',      on: false },
+  { key: 'ecmwf-roi',      label: 'ECMWF ROI',          group: 'ECMWF',      on: false },
+  { key: 'ecmwf-fit-pct',  label: 'ECMWF Fit%',         group: 'ECMWF Fit',  on: false },
+  { key: 'ecmwf-fit-edge', label: 'ECMWF Fit Edge',     group: 'ECMWF Fit',  on: false },
+  { key: 'ecmwf-fit-roi',  label: 'ECMWF Fit ROI',      group: 'ECMWF Fit',  on: false },
+];
+
+function applyColumnVisibility() {
+  const resultsEl = document.getElementById('results-area');
+  COLS.forEach(col => {
+    resultsEl.querySelectorAll(`.col-${col.key}`)
+      .forEach(el => el.classList.toggle('d-none', !col.on));
+  });
+}
+
 async function loadComparison() {
   const city         = document.getElementById('sel-city').value;
   const forecastDate = document.getElementById('inp-forecast-date').value;
@@ -333,25 +372,33 @@ async function loadComparison() {
   try {
     const params = { city };
     if (forecastDate) params.forecast_date = forecastDate;
-    const rows = await api('GET', '/nbm-forecasts' + qs(params));
 
-    if (!rows || rows.length === 0) {
+    // Fetch GFS and ECMWF forecasts in parallel
+    const [gfsRows, ecmwfRows] = await Promise.all([
+      api('GET', '/meteo-gfs-forecasts' + qs(params)),
+      api('GET', '/meteo-ecmwf-forecasts' + qs(params)).catch(() => []),
+    ]);
+
+    if (!gfsRows || gfsRows.length === 0) {
       loadingEl.classList.add('d-none');
       emptyEl.classList.remove('d-none');
       return;
     }
 
-    // One NBM row per target_date (use whichever comes first)
-    const byDate = {};
-    rows.forEach(r => { if (!byDate[r.target_date]) byDate[r.target_date] = r; });
-    const targetDates = Object.keys(byDate).sort();
+    // One row per target_date (use whichever comes first)
+    const gfsByDate = {};
+    gfsRows.forEach(r => { if (!gfsByDate[r.target_date]) gfsByDate[r.target_date] = r; });
+    const ecmwfByDate = {};
+    (ecmwfRows || []).forEach(r => { if (!ecmwfByDate[r.target_date]) ecmwfByDate[r.target_date] = r; });
+    const targetDates = Object.keys(gfsByDate).sort();
 
     // Fetch all Polymarket markets in parallel via backend proxy
     const polyMarkets = await Promise.all(targetDates.map(d => fetchPolyMarkets(city, d)));
 
     _combined = targetDates.map((d, i) => ({
       date:    d,
-      nbm:     byDate[d],
+      gfs:     gfsByDate[d],
+      ecmwf:   ecmwfByDate[d] || null,
       markets: polyMarkets[i] || [],
     }));
 
@@ -407,8 +454,9 @@ function renderResults() {
   const cityObj  = CITIES.find(c => c.slug === citySlug);
 
   _combined.forEach(entry => {
-    const { date, nbm, markets } = entry;
-    const members = (nbm.member_temps && nbm.member_temps.length) ? nbm.member_temps : null;
+    const { date, gfs, ecmwf, markets } = entry;
+    const members = (gfs.member_temps && gfs.member_temps.length) ? gfs.member_temps : null;
+    const ecmwfMembers = (ecmwf && ecmwf.member_temps && ecmwf.member_temps.length) ? ecmwf.member_temps : null;
 
     // Sort markets low → high temperature then compute one row per bracket
     const sortedMarkets = [...markets].sort((a, b) => {
@@ -424,52 +472,71 @@ function renderResults() {
       const noPct     = prices && prices.length > 1 ? parseFloat(prices[1]) * 100 : null;
       const label     = mkt.question || mkt.title || '';
       const bracket   = parseBracket(label);
+      // GFS
       const res       = nbmProb(members, bracket);
       const meteoPct  = res ? res.pct : null;
       const meteoEdge = (yesPct !== null && meteoPct !== null) ? meteoPct - yesPct : null;
-      const fp        = fitProb(bracket, nbm.predicted_max_temp_c, nbm.temp_std_dev_c, nbm.skewness);
+      const fp        = fitProb(bracket, gfs.predicted_max_temp_c, gfs.temp_std_dev_c, gfs.skewness);
       const fitEdge   = (yesPct !== null && fp !== null) ? fp - yesPct : null;
+      // ECMWF
+      const ecRes      = nbmProb(ecmwfMembers, bracket);
+      const ecmwfPct   = ecRes ? ecRes.pct : null;
+      const ecmwfEdge  = (yesPct !== null && ecmwfPct !== null) ? ecmwfPct - yesPct : null;
+      const ecmwfFp    = ecmwf ? fitProb(bracket, ecmwf.predicted_max_temp_c, ecmwf.temp_std_dev_c, ecmwf.skewness) : null;
+      const ecmwfFitEdge = (yesPct !== null && ecmwfFp !== null) ? ecmwfFp - yesPct : null;
       // Polymarket market URL — deep-link to specific market if slug available, else event page
       const mktSlug   = mkt.slug || null;
       const pmUrl     = mktSlug
         ? `https://polymarket.com/event/${eventSlug}/${mktSlug}`
         : `https://polymarket.com/event/${eventSlug}`;
+      // Matching member temps for this bracket
+      const memberFilter = t => {
+        if (!bracket) return false;
+        if (bracket.type === 'range') return t >= bracket.lo && t < bracket.hi;
+        if (bracket.type === 'above') return t >= bracket.lo;
+        if (bracket.type === 'below') return t < bracket.hi;
+        return false;
+      };
+      const matchGfsMembers    = (members      && bracket) ? members.filter(memberFilter)      : [];
+      const matchEcmwfMembers  = (ecmwfMembers && bracket) ? ecmwfMembers.filter(memberFilter) : [];
+      // GFS ROI
       const yesRoi = (meteoEdge !== null && meteoEdge > 5 && yesPct !== null && meteoPct !== null)
-        ? (() => {
-            const pYesWins = meteoPct / 100;
-            const yesCost  = yesPct / 100;
-            const ev       = (1 - yesCost) * pYesWins - yesCost * (1 - pYesWins);
-            return { ev, roi: ev / yesCost, yesCost, side: 'yes' };
-          })()
+        ? (() => { const pYesWins = meteoPct / 100, yesCost = yesPct / 100, ev = (1 - yesCost) * pYesWins - yesCost * (1 - pYesWins); return { ev, roi: ev / yesCost, yesCost, side: 'yes' }; })()
         : null;
       const noRoi = (meteoEdge !== null && meteoEdge < -5 && noPct !== null && meteoPct !== null)
-        ? (() => {
-            const pNoWins = 1 - meteoPct / 100;
-            const noCost  = noPct / 100;
-            const ev      = (1 - noCost) * pNoWins - noCost * (1 - pNoWins);
-            return { ev, roi: ev / noCost, noCost, side: 'no' };
-          })()
+        ? (() => { const pNoWins = 1 - meteoPct / 100, noCost = noPct / 100, ev = (1 - noCost) * pNoWins - noCost * (1 - pNoWins); return { ev, roi: ev / noCost, noCost, side: 'no' }; })()
         : null;
       const rawRoi = yesRoi || noRoi || null;
       const fitYesRoi = (fitEdge !== null && fitEdge > 5 && yesPct !== null && fp !== null)
-        ? (() => {
-            const pYesWins = fp / 100;
-            const yesCost  = yesPct / 100;
-            const ev       = (1 - yesCost) * pYesWins - yesCost * (1 - pYesWins);
-            return { ev, roi: ev / yesCost, yesCost, side: 'yes' };
-          })()
+        ? (() => { const pYesWins = fp / 100, yesCost = yesPct / 100, ev = (1 - yesCost) * pYesWins - yesCost * (1 - pYesWins); return { ev, roi: ev / yesCost, yesCost, side: 'yes' }; })()
         : null;
       const fitNoRoi = (fitEdge !== null && fitEdge < -5 && noPct !== null && fp !== null)
-        ? (() => {
-            const pNoWins = 1 - fp / 100;
-            const noCost  = noPct / 100;
-            const ev      = (1 - noCost) * pNoWins - noCost * (1 - pNoWins);
-            return { ev, roi: ev / noCost, noCost, side: 'no' };
-          })()
+        ? (() => { const pNoWins = 1 - fp / 100, noCost = noPct / 100, ev = (1 - noCost) * pNoWins - noCost * (1 - pNoWins); return { ev, roi: ev / noCost, noCost, side: 'no' }; })()
         : null;
       const fitRoi = fitYesRoi || fitNoRoi || null;
-      return { label, bracket, yesPct, noPct, meteoPct, meteoCount: res ? res.count : null, meteoN: res ? res.n : null,
-               meteoEdge, rawRoi, fitPct: fp, fitEdge, fitRoi, pmUrl };
+      // ECMWF ROI
+      const ecYesRoi = (ecmwfEdge !== null && ecmwfEdge > 5 && yesPct !== null && ecmwfPct !== null)
+        ? (() => { const pYesWins = ecmwfPct / 100, yesCost = yesPct / 100, ev = (1 - yesCost) * pYesWins - yesCost * (1 - pYesWins); return { ev, roi: ev / yesCost, yesCost, side: 'yes' }; })()
+        : null;
+      const ecNoRoi = (ecmwfEdge !== null && ecmwfEdge < -5 && noPct !== null && ecmwfPct !== null)
+        ? (() => { const pNoWins = 1 - ecmwfPct / 100, noCost = noPct / 100, ev = (1 - noCost) * pNoWins - noCost * (1 - pNoWins); return { ev, roi: ev / noCost, noCost, side: 'no' }; })()
+        : null;
+      const ecRawRoi = ecYesRoi || ecNoRoi || null;
+      const ecFitYesRoi = (ecmwfFitEdge !== null && ecmwfFitEdge > 5 && yesPct !== null && ecmwfFp !== null)
+        ? (() => { const pYesWins = ecmwfFp / 100, yesCost = yesPct / 100, ev = (1 - yesCost) * pYesWins - yesCost * (1 - pYesWins); return { ev, roi: ev / yesCost, yesCost, side: 'yes' }; })()
+        : null;
+      const ecFitNoRoi = (ecmwfFitEdge !== null && ecmwfFitEdge < -5 && noPct !== null && ecmwfFp !== null)
+        ? (() => { const pNoWins = 1 - ecmwfFp / 100, noCost = noPct / 100, ev = (1 - noCost) * pNoWins - noCost * (1 - pNoWins); return { ev, roi: ev / noCost, noCost, side: 'no' }; })()
+        : null;
+      const ecFitRoi = ecFitYesRoi || ecFitNoRoi || null;
+      return { label, bracket, yesPct, noPct,
+               meteoPct, meteoCount: res ? res.count : null, meteoN: res ? res.n : null, meteoEdge, rawRoi,
+               matchGfsMembers,
+               fitPct: fp, fitEdge, fitRoi,
+               ecmwfPct, ecmwfCount: ecRes ? ecRes.count : null, ecmwfN: ecRes ? ecRes.n : null, ecmwfEdge, ecRawRoi,
+               matchEcmwfMembers,
+               ecmwfFitPct: ecmwfFp, ecmwfFitEdge, ecFitRoi,
+               pmUrl };
     });
 
     // Date label
@@ -481,10 +548,13 @@ function renderResults() {
     // Chart date option
     const opt = document.createElement('option');
     opt.value = date;
-    opt.textContent = `${dateLabel} (lead ${nbm.lead_days}d)`;
+    opt.textContent = `${dateLabel} (lead ${gfs.lead_days}d)`;
     chartSel.appendChild(opt);
 
     const pct = v => v !== null ? v.toFixed(1) + '%' : '<span class="text-muted">—</span>';
+    const fmtMembers = arr => arr.length
+      ? [...arr].sort((a, b) => a - b).map(t => toDisp(t).toFixed(1) + unitStr).join(', ')
+      : '—';
 
     // Detect display unit (°F or °C) from the markets for this date
     const allBrackets = rows.map(r => parseBracket(r.label)).filter(Boolean);
@@ -518,15 +588,24 @@ function renderResults() {
           <span class="text-muted">Outside all PM brackets</span>
           <div class="text-muted" style="font-size:.78em;word-break:break-word">${escHtml(unaccountedLabels)}</div>
         </td>
-        <td class="text-end text-muted">—</td>
-        <td class="text-end text-muted">—</td>
-        <td class="text-end text-muted">${(unaccounted / totalMembers * 100).toFixed(1)}%</td>
-        <td class="text-end text-muted small">${unaccounted}/${totalMembers}</td>
-        <td class="text-center text-muted">—</td>
-        <td class="text-end text-muted">—</td>
-        <td class="text-end text-muted">—</td>
-        <td class="text-center text-muted">—</td>
-        <td class="text-end text-muted">—</td>
+        <td class="text-end text-muted col-pm-yes">—</td>
+        <td class="text-end text-muted col-pm-no">—</td>
+        <td class="text-end text-muted col-gfs-pct">${(unaccounted / totalMembers * 100).toFixed(1)}%</td>
+        <td class="text-end text-muted small col-gfs-count">${unaccounted}/${totalMembers}</td>
+        <td class="col-gfs-members text-muted" style="font-size:.75em">${escHtml(unaccountedLabels)}</td>
+        <td class="text-center text-muted col-gfs-edge">—</td>
+        <td class="text-end text-muted col-gfs-roi">—</td>
+        <td class="text-end text-muted col-gfs-fit-pct">—</td>
+        <td class="text-center text-muted col-gfs-fit-edge">—</td>
+        <td class="text-end text-muted col-gfs-fit-roi">—</td>
+        <td class="text-end text-muted col-ecmwf-pct">—</td>
+        <td class="text-end text-muted small col-ecmwf-count">—</td>
+        <td class="col-ecmwf-members text-muted col-ecmwf-members">—</td>
+        <td class="text-center text-muted col-ecmwf-edge">—</td>
+        <td class="text-end text-muted col-ecmwf-roi">—</td>
+        <td class="text-end text-muted col-ecmwf-fit-pct">—</td>
+        <td class="text-center text-muted col-ecmwf-fit-edge">—</td>
+        <td class="text-end text-muted col-ecmwf-fit-roi">—</td>
       </tr>` : '';
 
     const tableBody = rows.length > 0
@@ -552,33 +631,47 @@ function renderResults() {
                 ? `<div class="text-muted" style="font-size:.72em">${escHtml(bracketRange)}</div>`
                 : `<div class="text-danger" style="font-size:.72em">bracket not parsed</div>`}
             </td>
-            <td class="text-end">${pct(r.yesPct)}</td>
-            <td class="text-end">${pct(r.noPct)}</td>
-            <td class="text-end">${pct(r.meteoPct)}</td>
-            <td class="text-end text-muted small">${r.meteoCount !== null ? r.meteoCount + '/' + r.meteoN : '—'}</td>
-            <td class="text-center">${edgeBadge(r.meteoEdge)}</td>
-            <td class="text-end">${roiCell(r.rawRoi)}</td>
-            <td class="text-end">${pct(r.fitPct)}</td>
-            <td class="text-center">${edgeBadge(r.fitEdge)}</td>
-            <td class="text-end">${roiCell(r.fitRoi)}</td>
+            <td class="text-end col-pm-yes">${pct(r.yesPct)}</td>
+            <td class="text-end col-pm-no">${pct(r.noPct)}</td>
+            <td class="text-end col-gfs-pct">${pct(r.meteoPct)}</td>
+            <td class="text-end text-muted small col-gfs-count">${r.meteoCount !== null ? r.meteoCount + '/' + r.meteoN : '—'}</td>
+            <td class="col-gfs-members" style="max-width:220px;white-space:normal"><span class="text-muted" style="font-size:.75em">${escHtml(fmtMembers(r.matchGfsMembers))}</span></td>
+            <td class="text-center col-gfs-edge">${edgeBadge(r.meteoEdge)}</td>
+            <td class="text-end col-gfs-roi">${roiCell(r.rawRoi)}</td>
+            <td class="text-end col-gfs-fit-pct">${pct(r.fitPct)}</td>
+            <td class="text-center col-gfs-fit-edge">${edgeBadge(r.fitEdge)}</td>
+            <td class="text-end col-gfs-fit-roi">${roiCell(r.fitRoi)}</td>
+            <td class="text-end col-ecmwf-pct">${pct(r.ecmwfPct)}</td>
+            <td class="text-end text-muted small col-ecmwf-count">${r.ecmwfCount !== null ? r.ecmwfCount + '/' + r.ecmwfN : '—'}</td>
+            <td class="col-ecmwf-members" style="max-width:220px;white-space:normal"><span class="text-muted" style="font-size:.75em">${escHtml(fmtMembers(r.matchEcmwfMembers))}</span></td>
+            <td class="text-center col-ecmwf-edge">${edgeBadge(r.ecmwfEdge)}</td>
+            <td class="text-end col-ecmwf-roi">${roiCell(r.ecRawRoi)}</td>
+            <td class="text-end col-ecmwf-fit-pct">${pct(r.ecmwfFitPct)}</td>
+            <td class="text-center col-ecmwf-fit-edge">${edgeBadge(r.ecmwfFitEdge)}</td>
+            <td class="text-end col-ecmwf-fit-roi">${roiCell(r.ecFitRoi)}</td>
           </tr>`;
         }).join('') + unaccountedRow
-      : `<tr><td colspan="10" class="ps-3 py-2 text-muted fst-italic">No Polymarket markets found for this date.</td></tr>`;
+      : `<tr><td colspan="19" class="ps-3 py-2 text-muted fst-italic">No Polymarket markets found for this date.</td></tr>`;
 
-    const nbmSummary =
-      `\u03bc\u202f=\u202f${toDisp(nbm.predicted_max_temp_c).toFixed(1)}${unitStr}` +
-      `\u2002\u03c3\u202f=\u202f${toDispDelta(nbm.temp_std_dev_c).toFixed(1)}${unitStr}` +
-      `\u2002skew\u202f=\u202f${nbm.skewness.toFixed(2)}` +
-      `\u2002p10\u202f=\u202f${toDisp(nbm.p10_temp_c).toFixed(1)}${unitStr}` +
-      `\u2002p90\u202f=\u202f${toDisp(nbm.p90_temp_c).toFixed(1)}${unitStr}`;
+    const gfsSummary =
+      `GFS\u2002\u03bc\u202f=\u202f${toDisp(gfs.predicted_max_temp_c).toFixed(1)}${unitStr}` +
+      `\u2002\u03c3\u202f=\u202f${toDispDelta(gfs.temp_std_dev_c).toFixed(1)}${unitStr}` +
+      `\u2002skew\u202f=\u202f${gfs.skewness.toFixed(2)}` +
+      `\u2002p10\u202f=\u202f${toDisp(gfs.p10_temp_c).toFixed(1)}${unitStr}` +
+      `\u2002p90\u202f=\u202f${toDisp(gfs.p90_temp_c).toFixed(1)}${unitStr}`;
+    const ecmwfSummary = ecmwf
+      ? `\u2003ECMWF\u2002\u03bc\u202f=\u202f${toDisp(ecmwf.predicted_max_temp_c).toFixed(1)}${unitStr}` +
+        `\u2002\u03c3\u202f=\u202f${toDispDelta(ecmwf.temp_std_dev_c).toFixed(1)}${unitStr}` +
+        `\u2002skew\u202f=\u202f${ecmwf.skewness.toFixed(2)}`
+      : '';
 
     const section = document.createElement('div');
     section.className = 'card shadow-sm border-0 mb-3';
     section.innerHTML = `
       <div class="card-header bg-transparent d-flex align-items-center gap-2 flex-wrap py-2">
         <span class="fw-medium">${escHtml(dateLabel)}</span>
-        <span class="badge bg-secondary">lead ${nbm.lead_days}d</span>
-        <span class="text-muted small ms-auto">${escHtml(nbmSummary)}</span>
+        <span class="badge bg-secondary">lead ${gfs.lead_days}d</span>
+        <span class="text-muted small ms-auto">${escHtml(gfsSummary + ecmwfSummary)}</span>
         ${cityObj ? `<a href="${escHtml(openMeteoURL(cityObj))}" target="_blank" rel="noopener"
            class="text-muted small ms-2" title="View on Open-Meteo">
            <i class="bi bi-box-arrow-up-right"></i> Open-Meteo
@@ -590,15 +683,24 @@ function renderResults() {
             <thead class="table-light">
               <tr>
                 <th class="ps-3" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Temperature range from the Polymarket market">Bracket</th>
-                <th class="text-end" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Polymarket asking price for YES — the market&#39;s implied probability that the high temperature falls in this bracket">PM YES%</th>
-                <th class="text-end" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Polymarket asking price for NO — the independent ask price to buy a NO position on this bracket. Sourced directly from Polymarket, not derived from YES%.">PM NO%</th>
-                <th class="text-end" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Empirical probability from 30 GFS ensemble members: fraction of members whose predicted high falls in this bracket">Meteo Members%</th>
-                <th class="text-end text-muted" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Number of ensemble members whose predicted high falls in this bracket, out of 30 total">Members</th>
-                <th class="text-center" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Meteo Members% minus PM YES%. Positive = model sees higher probability than the market implies (potential YES value). Negative = market overprices this outcome (potential NO value).">Meteo Raw Edge</th>
-                <th class="text-end" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Expected ROI of the suggested bet (raw members edge). Shows Yes ROI when BET YES: EV = (1−yesCost)×P(Yes wins) − yesCost×P(No wins). Shows No ROI when BET NO: EV = (1−noCost)×P(No wins) − noCost×P(Yes wins). Probabilities from raw member count.">ROI</th>
-                <th class="text-end" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Skew-normal probability fitted to the ensemble mean, std dev, and skewness. A smooth estimate that works even when few members fall in a bracket.">Meteo Fit%</th>
-                <th class="text-center" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Meteo Fit% minus PM YES%. Edge using the analytical skew-normal estimate rather than the raw member count.">Meteo Fit Edge</th>
-                <th class="text-end" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Expected ROI of the suggested bet (fit edge). Same formula as ROI column but using the skew-normal fitted probability instead of the raw member count.">Fit ROI</th>
+                <th class="text-end col-pm-yes" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Polymarket asking price for YES — the market&#39;s implied probability that the high temperature falls in this bracket">PM YES%</th>
+                <th class="text-end col-pm-no" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Polymarket asking price for NO — the independent ask price to buy a NO position on this bracket. Sourced directly from Polymarket, not derived from YES%.">PM NO%</th>
+                <th class="text-end col-gfs-pct" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Empirical probability from GFS ensemble members: fraction of members whose predicted high falls in this bracket">GFS Members%</th>
+                <th class="text-end text-muted col-gfs-count" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Number of GFS ensemble members in this bracket out of total">GFS Count</th>
+                <th class="col-gfs-members" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Individual GFS ensemble member temperatures that fall in this bracket, sorted low to high">GFS Member Temps</th>
+                <th class="text-center col-gfs-edge" data-bs-toggle="tooltip" data-bs-placement="bottom" title="GFS Members% minus PM YES%. Positive = model sees higher probability than market (potential YES value). Negative = potential NO value.">GFS Raw Edge</th>
+                <th class="text-end col-gfs-roi" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Expected ROI of the suggested bet using GFS raw member probabilities.">GFS ROI</th>
+                <th class="text-end col-gfs-fit-pct" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Skew-normal probability fitted to GFS ensemble mean, std dev, and skewness.">GFS Fit%</th>
+                <th class="text-center col-gfs-fit-edge" data-bs-toggle="tooltip" data-bs-placement="bottom" title="GFS Fit% minus PM YES%. Edge using the analytical skew-normal estimate.">GFS Fit Edge</th>
+                <th class="text-end col-gfs-fit-roi" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Expected ROI using GFS skew-normal fitted probability.">GFS Fit ROI</th>
+                <th class="text-end col-ecmwf-pct" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Empirical probability from ECMWF IFS ensemble members: fraction of members whose predicted high falls in this bracket">ECMWF Members%</th>
+                <th class="text-end text-muted col-ecmwf-count" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Number of ECMWF ensemble members in this bracket out of total">ECMWF Count</th>
+                <th class="col-ecmwf-members" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Individual ECMWF ensemble member temperatures that fall in this bracket, sorted low to high">ECMWF Member Temps</th>
+                <th class="text-center col-ecmwf-edge" data-bs-toggle="tooltip" data-bs-placement="bottom" title="ECMWF Members% minus PM YES%. Positive = model sees higher probability than market (potential YES value). Negative = potential NO value.">ECMWF Raw Edge</th>
+                <th class="text-end col-ecmwf-roi" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Expected ROI of the suggested bet using ECMWF raw member probabilities.">ECMWF ROI</th>
+                <th class="text-end col-ecmwf-fit-pct" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Skew-normal probability fitted to ECMWF ensemble mean, std dev, and skewness.">ECMWF Fit%</th>
+                <th class="text-center col-ecmwf-fit-edge" data-bs-toggle="tooltip" data-bs-placement="bottom" title="ECMWF Fit% minus PM YES%. Edge using the analytical skew-normal estimate.">ECMWF Fit Edge</th>
+                <th class="text-end col-ecmwf-fit-roi" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Expected ROI using ECMWF skew-normal fitted probability.">ECMWF Fit ROI</th>
               </tr>
             </thead>
             <tbody>${tableBody}</tbody>
@@ -607,6 +709,7 @@ function renderResults() {
       </div>`;
 
     resultsEl.appendChild(section);
+    applyColumnVisibility();
   });
 
   if (_combined.length > 0) {
@@ -624,13 +727,16 @@ function renderChart(selectedDate) {
   const entry = _combined.find(c => c.date === selectedDate);
   if (!entry) return;
 
-  const { nbm, markets } = entry;
-  const members = (nbm.member_temps && nbm.member_temps.length) ? nbm.member_temps : null;
+  const { gfs, ecmwf, markets } = entry;
+  const members = (gfs.member_temps && gfs.member_temps.length) ? gfs.member_temps : null;
+  const ecmwfMembers = (ecmwf && ecmwf.member_temps && ecmwf.member_temps.length) ? ecmwf.member_temps : null;
 
-  const labels   = [];
-  const pmData   = [];
-  const meteoData = [];
-  const fitData  = [];
+  const labels    = [];
+  const pmData    = [];
+  const gfsData   = [];
+  const fitData   = [];
+  const ecmwfData = [];
+  const ecmwfFitData = [];
 
   const sortedForChart = [...markets].sort((a, b) => {
     const ba = parseBracket(a.question || a.title || '');
@@ -644,13 +750,17 @@ function renderChart(selectedDate) {
     const label   = mkt.question || mkt.title || '';
     const bracket = parseBracket(label);
     const res     = nbmProb(members, bracket);
-    const fp      = fitProb(bracket, nbm.predicted_max_temp_c, nbm.temp_std_dev_c, nbm.skewness);
-    if (yesPct === null && !res && fp === null) return;
+    const fp      = fitProb(bracket, gfs.predicted_max_temp_c, gfs.temp_std_dev_c, gfs.skewness);
+    const ecRes   = nbmProb(ecmwfMembers, bracket);
+    const ecFp    = ecmwf ? fitProb(bracket, ecmwf.predicted_max_temp_c, ecmwf.temp_std_dev_c, ecmwf.skewness) : null;
+    if (yesPct === null && !res && fp === null && !ecRes && ecFp === null) return;
 
     labels.push(shortLabel(label));
     pmData.push(yesPct !== null ? parseFloat(yesPct.toFixed(1)) : null);
-    meteoData.push(res ? parseFloat(res.pct.toFixed(1)) : null);
+    gfsData.push(res ? parseFloat(res.pct.toFixed(1)) : null);
     fitData.push(fp !== null ? parseFloat(fp.toFixed(1)) : null);
+    ecmwfData.push(ecRes ? parseFloat(ecRes.pct.toFixed(1)) : null);
+    ecmwfFitData.push(ecFp !== null ? parseFloat(ecFp.toFixed(1)) : null);
   });
 
   const subtitleEl = document.getElementById('chart-subtitle');
@@ -665,7 +775,8 @@ function renderChart(selectedDate) {
   const chartToDisp = c => chartUnit === 'F' ? c * 9/5 + 32 : c;
   const chartUnitStr = chartUnit === 'F' ? '°F' : '°C';
   subtitleEl.textContent =
-    `lead ${nbm.lead_days}d \u2014 \u03bc\u202f=\u202f${chartToDisp(nbm.predicted_max_temp_c).toFixed(1)}${chartUnitStr}`;
+    `lead ${gfs.lead_days}d \u2014 GFS \u03bc\u202f=\u202f${chartToDisp(gfs.predicted_max_temp_c).toFixed(1)}${chartUnitStr}` +
+    (ecmwf ? `\u2003ECMWF \u03bc\u202f=\u202f${chartToDisp(ecmwf.predicted_max_temp_c).toFixed(1)}${chartUnitStr}` : '');
 
   if (edgeChart) edgeChart.destroy();
   edgeChart = new Chart(document.getElementById('edge-chart'), {
@@ -682,18 +793,34 @@ function renderChart(selectedDate) {
           borderRadius: 3,
         },
         {
-          label: 'Meteo Members%',
-          data: meteoData,
+          label: 'GFS Members%',
+          data: gfsData,
           backgroundColor: 'rgba(13,110,253,0.65)',
           borderColor:     'rgba(13,110,253,0.9)',
           borderWidth: 1,
           borderRadius: 3,
         },
         {
-          label: 'Meteo Fit%',
+          label: 'GFS Fit%',
           data: fitData,
           backgroundColor: 'rgba(25,135,84,0.65)',
           borderColor:     'rgba(25,135,84,0.9)',
+          borderWidth: 1,
+          borderRadius: 3,
+        },
+        {
+          label: 'ECMWF Members%',
+          data: ecmwfData,
+          backgroundColor: 'rgba(111,66,193,0.65)',
+          borderColor:     'rgba(111,66,193,0.9)',
+          borderWidth: 1,
+          borderRadius: 3,
+        },
+        {
+          label: 'ECMWF Fit%',
+          data: ecmwfFitData,
+          backgroundColor: 'rgba(214,51,132,0.65)',
+          borderColor:     'rgba(214,51,132,0.9)',
           borderWidth: 1,
           borderRadius: 3,
         },
@@ -728,6 +855,37 @@ function renderChart(selectedDate) {
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('chart-date-sel').addEventListener('change', e => {
     renderChart(e.target.value);
+  });
+
+  // Populate column filter menu grouped by section
+  const menu = document.getElementById('col-filter-menu');
+  const groups = [...new Set(COLS.map(c => c.group))];
+  groups.forEach((group, gi) => {
+    if (gi > 0) {
+      const div = document.createElement('div');
+      div.className = 'dropdown-divider my-2';
+      menu.appendChild(div);
+    }
+    const header = document.createElement('div');
+    header.className = 'text-muted small fw-semibold mb-1 px-1';
+    header.textContent = group;
+    menu.appendChild(header);
+    COLS.filter(c => c.group === group).forEach(col => {
+      const label = document.createElement('label');
+      label.className = 'dropdown-item d-flex align-items-center gap-2 py-1 px-1';
+      label.style.cursor = 'pointer';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.className = 'form-check-input mt-0';
+      cb.checked = col.on;
+      cb.addEventListener('change', () => {
+        col.on = cb.checked;
+        applyColumnVisibility();
+      });
+      label.appendChild(cb);
+      label.appendChild(document.createTextNode(col.label));
+      menu.appendChild(label);
+    });
   });
 });
 </script>
