@@ -165,6 +165,14 @@ function parseBracket(text) {
    || t.match(/(\d+(?:\.\d+)?)\s*°?\s*[Cc]\s+or\s+(?:below|lower|less)/i);
   if (m) return { type: 'below', hi: +m[1] + 0.5, unit: 'C' };
 
+  // ── Single °F degree (e.g. "be 86°F") → treat as [X-0.5, X+0.5)°F ────────
+  m = t.match(/\b(\d+(?:\.\d+)?)\s*°\s*[Ff]\b/i);
+  if (m) return { type: 'range', lo: (+m[1] - 0.5 - 32) * 5/9, hi: (+m[1] + 0.5 - 32) * 5/9, unit: 'F' };
+
+  // ── Single °C degree (e.g. "be 30°C") → treat as [X-0.5, X+0.5)°C ────────
+  m = t.match(/\b(\d+(?:\.\d+)?)\s*°\s*[Cc]\b/i);
+  if (m) return { type: 'range', lo: +m[1] - 0.5, hi: +m[1] + 0.5, unit: 'C' };
+
   return null;
 }
 
@@ -444,6 +452,9 @@ function shortLabel(question) {
   if (m) return m[1];
   // "X°F/C or above/below/higher/lower/more/less"
   m = t.match(/(\d+(?:\.\d+)?\s*°?\s*[CFcf]\s+or\s+(?:above|below|higher|lower|more|less|greater))/i);
+  if (m) return m[1];
+  // single degree "be X°C" / "be X°F"
+  m = t.match(/(\d+(?:\.\d+)?°\s*[CFcf])/i);
   if (m) return m[1];
   return t.length > 36 ? t.slice(0, 34) + '\u2026' : t;
 }
