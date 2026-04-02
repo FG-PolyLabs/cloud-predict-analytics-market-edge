@@ -330,6 +330,13 @@ firebase.auth().onAuthStateChanged(user => {
 // ── Main load ──────────────────────────────────────────────────────────────
 let edgeChart = null;
 let _combined = [];
+let pmFetchedAt = null;
+
+// Format an ISO timestamp as "YYYY-MM-DD HH:MM UTC"
+function fmtUTC(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+}
 
 // ── Column visibility ──────────────────────────────────────────────────────
 const COLS = [
@@ -401,6 +408,7 @@ async function loadComparison() {
     const targetDates = Object.keys(gfsByDate).sort();
 
     // Fetch all Polymarket markets in parallel via backend proxy
+    pmFetchedAt = new Date().toISOString();
     const polyMarkets = await Promise.all(targetDates.map(d => fetchPolyMarkets(city, d)));
 
     _combined = targetDates.map((d, i) => ({
@@ -679,6 +687,10 @@ function renderResults() {
         `\u2002\u03c3\u202f=\u202f${toDispDelta(ecmwf.temp_std_dev_c).toFixed(1)}${unitStr}` +
         `\u2002skew\u202f=\u202f${ecmwf.skewness.toFixed(2)}`
       : '';
+    const timestampLine =
+      `GFS run: ${fmtUTC(gfs.model_run_at)}` +
+      (ecmwf ? `\u2003ECMWF run: ${fmtUTC(ecmwf.model_run_at)}` : '') +
+      `\u2003PM prices: ${fmtUTC(pmFetchedAt)}`;
 
     const section = document.createElement('div');
     section.className = 'card shadow-sm border-0 mb-3';
@@ -691,6 +703,7 @@ function renderResults() {
            class="text-muted small ms-2" title="View on Open-Meteo">
            <i class="bi bi-box-arrow-up-right"></i> Open-Meteo
         </a>` : ''}
+        <div class="w-100 text-muted" style="font-size:.72em">${escHtml(timestampLine)}</div>
       </div>
       <div class="card-body p-0">
         <div class="table-responsive">
