@@ -50,6 +50,34 @@
         </div>
       </div>
     </div>
+    <!-- Run selectors + PM source — shown after first load -->
+    <div class="row g-2 align-items-end mt-1 d-none" id="run-selectors-row">
+      <div class="col-sm-auto">
+        <label class="form-label small fw-medium mb-1" for="sel-gfs-run">GFS Run</label>
+        <select class="form-select form-select-sm" id="sel-gfs-run" style="min-width:200px"
+                onchange="onRunChange()"></select>
+      </div>
+      <div class="col-sm-auto">
+        <label class="form-label small fw-medium mb-1" for="sel-ecmwf-run">ECMWF Run</label>
+        <select class="form-select form-select-sm" id="sel-ecmwf-run" style="min-width:200px"
+                onchange="onRunChange()"></select>
+      </div>
+      <div class="col-sm-auto">
+        <label class="form-label small fw-medium mb-1">PM Source</label>
+        <div class="btn-group btn-group-sm" role="group">
+          <input type="radio" class="btn-check" name="pm-source" id="pm-src-bq"
+                 value="bq" checked onchange="onRunChange()">
+          <label class="btn btn-outline-secondary" for="pm-src-bq">
+            <i class="bi bi-database me-1"></i>BQ (aligned)
+          </label>
+          <input type="radio" class="btn-check" name="pm-source" id="pm-src-live"
+                 value="live" onchange="onRunChange()">
+          <label class="btn btn-outline-secondary" for="pm-src-live">
+            <i class="bi bi-wifi me-1"></i>Live
+          </label>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -331,11 +359,87 @@ firebase.auth().onAuthStateChanged(user => {
 let edgeChart = null;
 let _combined = [];
 let pmFetchedAt = null;
+let allGfsRows   = [];   // all rows returned for the selected forecast_date
+let allEcmwfRows = [];
 
 // Format an ISO timestamp as "YYYY-MM-DD HH:MM UTC"
 function fmtUTC(iso) {
   if (!iso) return '—';
   return new Date(iso).toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+}
+
+// Derive the integer threshold (in the market's native unit) from a parsed bracket.
+// Matches the value stored in polymarket_snapshots.temp_threshold in BQ:
+// °C brackets store the °C integer; °F brackets store the °F integer.
+function bracketThreshold(bracket) {
+  if (!bracket) return null;
+  let center;
+  if      (bracket.type === 'range') center = (bracket.lo + bracket.hi) / 2;
+  else if (bracket.type === 'above') center = bracket.lo + 0.5;
+  else if (bracket.type === 'below') center = bracket.hi - 0.5;
+  else return null;
+  return bracket.unit === 'F' ? Math.round(center * 9/5 + 32) : Math.round(center);
+}
+
+// Fetch BQ-stored PM snapshots closest to asOf (ISO string) for a city+date.
+async function fetchPolyMarketsBQ(city, date, asOf) {
+  try {
+    const snaps = await api('GET',
+      `/polymarket-snapshots-at?city=${encodeURIComponent(city)}&date=${date}&as_of=${encodeURIComponent(new Date(asOf).toISOString())}`);
+    return Array.isArray(snaps) ? snaps : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+// Merge BQ snapshot prices into a live markets array.
+// Returns { markets, pmTimestamp } where pmTimestamp is the BQ snapshot time used.
+function mergeBQPrices(markets, bqSnaps) {
+  if (!bqSnaps || bqSnaps.length === 0) return { markets, pmTimestamp: null };
+  const byThreshold = {};
+  bqSnaps.forEach(s => { byThreshold[s.temp_threshold] = s; });
+  let pmTimestamp = null;
+  const merged = markets.map(mkt => {
+    const bracket = parseBracket(mkt.question || mkt.title || '');
+    const thr = bracketThreshold(bracket);
+    const snap = thr !== null ? byThreshold[thr] : null;
+    if (!snap) return mkt;
+    if (!pmTimestamp || snap.timestamp > pmTimestamp) pmTimestamp = snap.timestamp;
+    return { ...mkt, outcomePrices: [String(snap.yes_cost), String(snap.no_cost)], tokens: null };
+  });
+  return { markets: merged, pmTimestamp };
+}
+
+// Populate a run selector <select> from an array of model_run_at strings (latest first).
+function populateRunSelector(selId, runs) {
+  const sel = document.getElementById(selId);
+  const prev = sel.value;
+  sel.innerHTML = '';
+  if (runs.length === 0) {
+    sel.innerHTML = '<option value="">No runs available</option>';
+    return;
+  }
+  runs.forEach(r => {
+    const opt = document.createElement('option');
+    opt.value = r;
+    opt.textContent = fmtUTC(r);
+    sel.appendChild(opt);
+  });
+  // Restore previous selection if still available, else default to latest (first)
+  sel.value = runs.includes(prev) ? prev : runs[0];
+}
+
+// Extract sorted-descending distinct model_run_at values from a row array.
+function distinctRuns(rows) {
+  const seen = new Set();
+  rows.forEach(r => { if (r.model_run_at) seen.add(r.model_run_at); });
+  return [...seen].sort((a, b) => (a > b ? -1 : 1)); // latest first
+}
+
+// Called when a run selector or PM source radio changes.
+async function onRunChange() {
+  if (allGfsRows.length === 0) return;
+  await renderWithCurrentSelections();
 }
 
 // ── Column visibility ──────────────────────────────────────────────────────
@@ -373,10 +477,11 @@ async function loadComparison() {
   const forecastDate = document.getElementById('inp-forecast-date').value;
   if (!city) { showToast('Please select a city.', 'warning'); return; }
 
-  const loadingEl = document.getElementById('loading');
-  const emptyEl   = document.getElementById('empty-state');
-  const chartCard = document.getElementById('chart-card');
-  const resultsEl = document.getElementById('results-area');
+  const loadingEl     = document.getElementById('loading');
+  const emptyEl       = document.getElementById('empty-state');
+  const chartCard     = document.getElementById('chart-card');
+  const resultsEl     = document.getElementById('results-area');
+  const runSelectorsRow = document.getElementById('run-selectors-row');
 
   loadingEl.classList.remove('d-none');
   emptyEl.classList.add('d-none');
@@ -388,7 +493,7 @@ async function loadComparison() {
     const params = { city };
     if (forecastDate) params.forecast_date = forecastDate;
 
-    // Fetch GFS and ECMWF forecasts in parallel
+    // Fetch ALL GFS and ECMWF rows for the day (multiple model runs included)
     const [gfsRows, ecmwfRows] = await Promise.all([
       api('GET', '/meteo-gfs-forecasts' + qs(params)),
       api('GET', '/meteo-ecmwf-forecasts' + qs(params)).catch(() => []),
@@ -397,33 +502,93 @@ async function loadComparison() {
     if (!gfsRows || gfsRows.length === 0) {
       loadingEl.classList.add('d-none');
       emptyEl.classList.remove('d-none');
+      runSelectorsRow.classList.add('d-none');
       return;
     }
 
-    // One row per target_date (use whichever comes first)
-    const gfsByDate = {};
-    gfsRows.forEach(r => { if (!gfsByDate[r.target_date]) gfsByDate[r.target_date] = r; });
-    const ecmwfByDate = {};
-    (ecmwfRows || []).forEach(r => { if (!ecmwfByDate[r.target_date]) ecmwfByDate[r.target_date] = r; });
-    const targetDates = Object.keys(gfsByDate).sort();
+    allGfsRows   = gfsRows;
+    allEcmwfRows = ecmwfRows || [];
 
-    // Fetch all Polymarket markets in parallel via backend proxy
-    pmFetchedAt = new Date().toISOString();
-    const polyMarkets = await Promise.all(targetDates.map(d => fetchPolyMarkets(city, d)));
-
-    _combined = targetDates.map((d, i) => ({
-      date:    d,
-      gfs:     gfsByDate[d],
-      ecmwf:   ecmwfByDate[d] || null,
-      markets: polyMarkets[i] || [],
-    }));
+    // Populate run selectors (latest first = default)
+    populateRunSelector('sel-gfs-run',   distinctRuns(allGfsRows));
+    populateRunSelector('sel-ecmwf-run', distinctRuns(allEcmwfRows));
+    runSelectorsRow.classList.remove('d-none');
 
     loadingEl.classList.add('d-none');
-    renderResults();
+    await renderWithCurrentSelections();
   } catch (e) {
     loadingEl.classList.add('d-none');
     showToast('Load failed: ' + e.message, 'danger');
   }
+}
+
+async function renderWithCurrentSelections() {
+  const city      = document.getElementById('sel-city').value;
+  const gfsRun    = document.getElementById('sel-gfs-run').value;
+  const ecmwfRun  = document.getElementById('sel-ecmwf-run').value;
+  const pmSource  = document.querySelector('input[name="pm-source"]:checked')?.value || 'bq';
+
+  const loadingEl = document.getElementById('loading');
+  const emptyEl   = document.getElementById('empty-state');
+  const chartCard = document.getElementById('chart-card');
+  const resultsEl = document.getElementById('results-area');
+
+  loadingEl.classList.remove('d-none');
+  emptyEl.classList.add('d-none');
+  chartCard.classList.add('d-none');
+  resultsEl.innerHTML = '';
+
+  // Filter rows to the selected model run
+  const gfsFiltered   = allGfsRows.filter(r => r.model_run_at === gfsRun);
+  const ecmwfFiltered = allEcmwfRows.filter(r => r.model_run_at === ecmwfRun);
+
+  // One row per target_date for each model
+  const gfsByDate = {};
+  gfsFiltered.forEach(r => { if (!gfsByDate[r.target_date]) gfsByDate[r.target_date] = r; });
+  const ecmwfByDate = {};
+  ecmwfFiltered.forEach(r => { if (!ecmwfByDate[r.target_date]) ecmwfByDate[r.target_date] = r; });
+  const targetDates = Object.keys(gfsByDate).sort();
+
+  // Fetch live market structure (question text + slugs) for every target date
+  pmFetchedAt = new Date().toISOString();
+  const liveMarketsList = await Promise.all(targetDates.map(d => fetchPolyMarkets(city, d)));
+
+  // For BQ mode: fetch snapshot prices aligned to the selected GFS run time
+  let bqSnapsByDate = {};
+  if (pmSource === 'bq' && gfsRun) {
+    const bqResults = await Promise.all(
+      targetDates.map(d => fetchPolyMarketsBQ(city, d, gfsRun))
+    );
+    targetDates.forEach((d, i) => { bqSnapsByDate[d] = bqResults[i]; });
+  }
+
+  _combined = targetDates.map((d, i) => {
+    const liveMarkets = liveMarketsList[i] || [];
+    let markets = liveMarkets;
+    let pmTs = pmFetchedAt;
+
+    if (pmSource === 'bq') {
+      const { markets: merged, pmTimestamp } = mergeBQPrices(liveMarkets, bqSnapsByDate[d] || []);
+      markets = merged;
+      pmTs    = pmTimestamp || pmFetchedAt;
+    }
+
+    return {
+      date:        d,
+      gfs:         gfsByDate[d],
+      ecmwf:       ecmwfByDate[d] || null,
+      markets,
+      pmTimestamp: pmTs,
+      pmSource,
+    };
+  });
+
+  loadingEl.classList.add('d-none');
+  if (_combined.length === 0) {
+    emptyEl.classList.remove('d-none');
+    return;
+  }
+  renderResults();
 }
 
 // ── Rendering ──────────────────────────────────────────────────────────────
@@ -479,7 +644,7 @@ function renderResults() {
   const cityObj  = CITIES.find(c => c.slug === citySlug);
 
   _combined.forEach(entry => {
-    const { date, gfs, ecmwf, markets } = entry;
+    const { date, gfs, ecmwf, markets } = entry; // pmTimestamp and pmSource read directly from entry below
     const members = (gfs.member_temps && gfs.member_temps.length) ? gfs.member_temps : null;
     const ecmwfMembers = (ecmwf && ecmwf.member_temps && ecmwf.member_temps.length) ? ecmwf.member_temps : null;
 
@@ -687,10 +852,13 @@ function renderResults() {
         `\u2002\u03c3\u202f=\u202f${toDispDelta(ecmwf.temp_std_dev_c).toFixed(1)}${unitStr}` +
         `\u2002skew\u202f=\u202f${ecmwf.skewness.toFixed(2)}`
       : '';
+    const pmLabel = entry.pmSource === 'bq'
+      ? `PM prices (BQ): ${fmtUTC(entry.pmTimestamp)}`
+      : `PM prices (live): ${fmtUTC(entry.pmTimestamp)}`;
     const timestampLine =
       `GFS run: ${fmtUTC(gfs.model_run_at)}` +
       (ecmwf ? `\u2003ECMWF run: ${fmtUTC(ecmwf.model_run_at)}` : '') +
-      `\u2003PM prices: ${fmtUTC(pmFetchedAt)}`;
+      `\u2003${pmLabel}`;
 
     const section = document.createElement('div');
     section.className = 'card shadow-sm border-0 mb-3';
