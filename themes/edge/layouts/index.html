@@ -40,7 +40,20 @@
           <i class="bi bi-arrow-repeat me-1"></i>Load
         </button>
       </div>
-      <div class="col-sm-auto ms-sm-auto">
+      <div class="col-sm-auto ms-sm-auto d-flex gap-1">
+        <div class="dropdown">
+          <button class="btn btn-outline-secondary btn-sm dropdown-toggle" type="button"
+                  data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false">
+            <i class="bi bi-eye me-1"></i>Presets
+          </button>
+          <ul class="dropdown-menu">
+            <li><a class="dropdown-item small" href="#" onclick="applyPreset('edge-only');return false">Edge + ROI only</a></li>
+            <li><a class="dropdown-item small" href="#" onclick="applyPreset('ensemble');return false">Ensemble models</a></li>
+            <li><a class="dropdown-item small" href="#" onclick="applyPreset('deterministic');return false">Deterministic picks</a></li>
+            <li><a class="dropdown-item small" href="#" onclick="applyPreset('all');return false">Show all</a></li>
+            <li><a class="dropdown-item small" href="#" onclick="applyPreset('minimal');return false">Minimal (PM + MME)</a></li>
+          </ul>
+        </div>
         <div class="dropdown">
           <button class="btn btn-outline-secondary btn-sm dropdown-toggle" type="button"
                   data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false">
@@ -573,6 +586,47 @@ const COLS = [
   { key: 'mme-fit-edge',   label: 'MME Fit Edge',         group: 'MME Fit',       on: true  },
   { key: 'mme-fit-roi',    label: 'MME Fit ROI',          group: 'MME Fit',       on: true  },
 ];
+
+function applyPreset(preset) {
+  const edgeRoiKeys = new Set(COLS.filter(c => /edge|roi/i.test(c.key)).map(c => c.key));
+  const ensembleGroups = new Set(['GFS','GFS Fit','ECMWF','ECMWF Fit','ICON','ICON Fit','GEM','GEM Fit','AIFS','AIFS Fit']);
+  const detGroups = new Set(['Deterministic','Settlement']);
+  const mmeGroups = new Set(['MME','MME Fit']);
+
+  COLS.forEach(col => {
+    switch (preset) {
+      case 'edge-only':
+        col.on = col.group === 'Polymarket' ? col.key === 'pm-yes'
+               : detGroups.has(col.group) || col.group === 'Settlement' ? true
+               : mmeGroups.has(col.group) ? /edge|roi/i.test(col.key)
+               : /edge|roi/i.test(col.key);
+        break;
+      case 'ensemble':
+        col.on = col.group === 'Polymarket' ? col.key === 'pm-yes'
+               : ensembleGroups.has(col.group) ? /edge|roi/i.test(col.key)
+               : mmeGroups.has(col.group) ? /edge|roi/i.test(col.key)
+               : false;
+        break;
+      case 'deterministic':
+        col.on = col.group === 'Polymarket' ? col.key === 'pm-yes'
+               : detGroups.has(col.group) || col.group === 'Settlement' ? true
+               : false;
+        break;
+      case 'all':
+        col.on = true;
+        break;
+      case 'minimal':
+        col.on = col.key === 'pm-yes' || mmeGroups.has(col.group) && /edge|roi/i.test(col.key)
+               || col.group === 'Settlement';
+        break;
+    }
+  });
+  applyColumnVisibility();
+  // Update checkboxes in the column menu
+  document.querySelectorAll('#col-filter-menu input[type=checkbox]').forEach((cb, i) => {
+    if (i < COLS.length) cb.checked = COLS[i].on;
+  });
+}
 
 function applyColumnVisibility() {
   const resultsEl = document.getElementById('results-area');
