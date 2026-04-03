@@ -68,6 +68,16 @@
                 onchange="onRunChange()"></select>
       </div>
       <div class="col-sm-auto">
+        <label class="form-label small fw-medium mb-1" for="sel-gem-run">GEM Run</label>
+        <select class="form-select form-select-sm" id="sel-gem-run" style="min-width:200px"
+                onchange="onRunChange()"></select>
+      </div>
+      <div class="col-sm-auto">
+        <label class="form-label small fw-medium mb-1" for="sel-aifs-run">AIFS Run</label>
+        <select class="form-select form-select-sm" id="sel-aifs-run" style="min-width:200px"
+                onchange="onRunChange()"></select>
+      </div>
+      <div class="col-sm-auto">
         <label class="form-label small fw-medium mb-1" for="sel-pm-time">PM Snapshot</label>
         <select class="form-select form-select-sm" id="sel-pm-time" style="min-width:200px"
                 onchange="onRunChange()"></select>
@@ -366,8 +376,12 @@ let pmFetchedAt = null;
 let allGfsRows   = [];   // all rows returned for the selected forecast_date
 let allEcmwfRows = [];
 let allIconRows  = [];
+let allGemRows    = [];
+let allAifsRows   = [];
 let allTomorrowRows = [];  // deterministic point forecasts
 let allPirateRows   = [];
+let allNwsRows      = [];
+let allMeteoDetRows = [];
 
 // Format an ISO timestamp as "YYYY-MM-DD HH:MM UTC"
 function fmtUTC(iso) {
@@ -513,8 +527,18 @@ const COLS = [
   { key: 'icon-fit-pct',   label: 'ICON Fit%',            group: 'ICON Fit',   on: false },
   { key: 'icon-fit-edge',  label: 'ICON Fit Edge',        group: 'ICON Fit',   on: true  },
   { key: 'icon-fit-roi',   label: 'ICON Fit ROI',         group: 'ICON Fit',   on: true  },
+  { key: 'gem-edge',       label: 'GEM Raw Edge',         group: 'GEM',         on: true  },
+  { key: 'gem-roi',        label: 'GEM ROI',              group: 'GEM',         on: true  },
+  { key: 'gem-fit-edge',   label: 'GEM Fit Edge',         group: 'GEM Fit',     on: true  },
+  { key: 'gem-fit-roi',    label: 'GEM Fit ROI',          group: 'GEM Fit',     on: true  },
+  { key: 'aifs-edge',      label: 'AIFS Raw Edge',        group: 'AIFS',        on: true  },
+  { key: 'aifs-roi',       label: 'AIFS ROI',             group: 'AIFS',        on: true  },
+  { key: 'aifs-fit-edge',  label: 'AIFS Fit Edge',        group: 'AIFS Fit',    on: true  },
+  { key: 'aifs-fit-roi',   label: 'AIFS Fit ROI',         group: 'AIFS Fit',    on: true  },
   { key: 'tio-pick',       label: 'Tomorrow.io',          group: 'Deterministic', on: true  },
   { key: 'pw-pick',        label: 'Pirate Weather',       group: 'Deterministic', on: true  },
+  { key: 'nws-pick',       label: 'NWS',                  group: 'Deterministic', on: true  },
+  { key: 'om-pick',        label: 'Open-Meteo',           group: 'Deterministic', on: true  },
 ];
 
 function applyColumnVisibility() {
@@ -546,13 +570,18 @@ async function loadComparison() {
     const params = { city };
     if (forecastDate) params.forecast_date = forecastDate;
 
-    // Fetch ALL GFS, ECMWF, ICON, and deterministic rows for the day
-    const [gfsRows, ecmwfRows, iconRows, tomorrowRows, pirateRows] = await Promise.all([
+    // Fetch all ensemble + deterministic rows for the day
+    const [gfsRows, ecmwfRows, iconRows, gemRows, aifsRows,
+           tomorrowRows, pirateRows, nwsRows, meteoDetRows] = await Promise.all([
       api('GET', '/meteo-gfs-forecasts' + qs(params)),
       api('GET', '/meteo-ecmwf-forecasts' + qs(params)).catch(() => []),
       api('GET', '/meteo-icon-forecasts' + qs(params)).catch(() => []),
+      api('GET', '/meteo-gem-forecasts' + qs(params)).catch(() => []),
+      api('GET', '/meteo-aifs-forecasts' + qs(params)).catch(() => []),
       api('GET', '/tomorrow-forecasts' + qs(params)).catch(() => []),
       api('GET', '/pirate-weather-forecasts' + qs(params)).catch(() => []),
+      api('GET', '/nws-forecasts' + qs(params)).catch(() => []),
+      api('GET', '/open-meteo-det-forecasts' + qs(params)).catch(() => []),
     ]);
 
     if (!gfsRows || gfsRows.length === 0) {
@@ -565,13 +594,19 @@ async function loadComparison() {
     allGfsRows      = gfsRows;
     allEcmwfRows    = ecmwfRows    || [];
     allIconRows     = iconRows     || [];
+    allGemRows      = gemRows      || [];
+    allAifsRows     = aifsRows     || [];
     allTomorrowRows = tomorrowRows || [];
     allPirateRows   = pirateRows   || [];
+    allNwsRows      = nwsRows      || [];
+    allMeteoDetRows = meteoDetRows || [];
 
     // Populate run selectors (latest first = default)
     populateRunSelector('sel-gfs-run',   distinctRuns(allGfsRows));
     populateRunSelector('sel-ecmwf-run', distinctRuns(allEcmwfRows));
     populateRunSelector('sel-icon-run',  distinctRuns(allIconRows));
+    populateRunSelector('sel-gem-run',   distinctRuns(allGemRows));
+    populateRunSelector('sel-aifs-run',  distinctRuns(allAifsRows));
 
     // Populate PM snapshot time selector from first target date
     const firstTargetDate = Object.keys(
@@ -599,6 +634,8 @@ async function renderWithCurrentSelections() {
   const gfsRun    = document.getElementById('sel-gfs-run').value;
   const ecmwfRun  = document.getElementById('sel-ecmwf-run').value;
   const iconRun   = document.getElementById('sel-icon-run').value;
+  const gemRun    = document.getElementById('sel-gem-run').value;
+  const aifsRun   = document.getElementById('sel-aifs-run').value;
   const pmTimeVal = document.getElementById('sel-pm-time').value;
   const pmSource  = pmTimeVal === 'live' ? 'live' : 'bq';
 
@@ -616,6 +653,8 @@ async function renderWithCurrentSelections() {
   const gfsFiltered   = allGfsRows.filter(r => r.model_run_at === gfsRun);
   const ecmwfFiltered = allEcmwfRows.filter(r => r.model_run_at === ecmwfRun);
   const iconFiltered  = allIconRows.filter(r => r.model_run_at === iconRun);
+  const gemFiltered   = allGemRows.filter(r => r.model_run_at === gemRun);
+  const aifsFiltered  = allAifsRows.filter(r => r.model_run_at === aifsRun);
 
   // One row per target_date for each model
   const gfsByDate = {};
@@ -624,6 +663,10 @@ async function renderWithCurrentSelections() {
   ecmwfFiltered.forEach(r => { if (!ecmwfByDate[r.target_date]) ecmwfByDate[r.target_date] = r; });
   const iconByDate = {};
   iconFiltered.forEach(r => { if (!iconByDate[r.target_date]) iconByDate[r.target_date] = r; });
+  const gemByDate = {};
+  gemFiltered.forEach(r => { if (!gemByDate[r.target_date]) gemByDate[r.target_date] = r; });
+  const aifsByDate = {};
+  aifsFiltered.forEach(r => { if (!aifsByDate[r.target_date]) aifsByDate[r.target_date] = r; });
   // Deterministic sources: use latest row per target_date (no run selector)
   const tomorrowByDate = {};
   [...allTomorrowRows].sort((a, b) => (a.model_run_at > b.model_run_at ? -1 : 1))
@@ -631,6 +674,12 @@ async function renderWithCurrentSelections() {
   const pirateByDate = {};
   [...allPirateRows].sort((a, b) => (a.model_run_at > b.model_run_at ? -1 : 1))
     .forEach(r => { if (!pirateByDate[r.target_date]) pirateByDate[r.target_date] = r; });
+  const nwsByDate = {};
+  [...allNwsRows].sort((a, b) => (a.model_run_at > b.model_run_at ? -1 : 1))
+    .forEach(r => { if (!nwsByDate[r.target_date]) nwsByDate[r.target_date] = r; });
+  const meteoDetByDate = {};
+  [...allMeteoDetRows].sort((a, b) => (a.model_run_at > b.model_run_at ? -1 : 1))
+    .forEach(r => { if (!meteoDetByDate[r.target_date]) meteoDetByDate[r.target_date] = r; });
   const targetDates = Object.keys(gfsByDate).sort();
 
   // Fetch live market structure (question text + slugs) for every target date
@@ -662,8 +711,12 @@ async function renderWithCurrentSelections() {
       gfs:         gfsByDate[d],
       ecmwf:       ecmwfByDate[d] || null,
       icon:        iconByDate[d]     || null,
+      gem:         gemByDate[d]      || null,
+      aifs:        aifsByDate[d]     || null,
       tomorrow:    tomorrowByDate[d] || null,
       pirate:      pirateByDate[d]   || null,
+      nws:         nwsByDate[d]      || null,
+      meteoDet:    meteoDetByDate[d] || null,
       markets,
       pmTimestamp: pmTs,
       pmSource,
@@ -731,10 +784,12 @@ function renderResults() {
   const cityObj  = CITIES.find(c => c.slug === citySlug);
 
   _combined.forEach(entry => {
-    const { date, gfs, ecmwf, icon, tomorrow, pirate, markets } = entry;
+    const { date, gfs, ecmwf, icon, gem, aifs, tomorrow, pirate, nws, meteoDet, markets } = entry;
     const members = (gfs.member_temps && gfs.member_temps.length) ? gfs.member_temps : null;
     const ecmwfMembers = (ecmwf && ecmwf.member_temps && ecmwf.member_temps.length) ? ecmwf.member_temps : null;
     const iconMembers  = (icon && icon.member_temps && icon.member_temps.length) ? icon.member_temps : null;
+    const gemMembers   = (gem  && gem.member_temps  && gem.member_temps.length)  ? gem.member_temps  : null;
+    const aifsMembers  = (aifs && aifs.member_temps && aifs.member_temps.length) ? aifs.member_temps : null;
 
     // Sort markets low → high temperature then compute one row per bracket
     const sortedMarkets = [...markets].sort((a, b) => {
@@ -768,6 +823,18 @@ function renderResults() {
       const iconEdge   = (yesPct !== null && iconPct !== null) ? iconPct - yesPct : null;
       const iconFp     = icon ? fitProb(bracket, icon.predicted_max_temp_c, icon.temp_std_dev_c, icon.skewness) : null;
       const iconFitEdge = (yesPct !== null && iconFp !== null) ? iconFp - yesPct : null;
+      // GEM
+      const gmRes      = nbmProb(gemMembers, bracket);
+      const gemPct     = gmRes ? gmRes.pct : null;
+      const gemEdge    = (yesPct !== null && gemPct !== null) ? gemPct - yesPct : null;
+      const gemFp      = gem ? fitProb(bracket, gem.predicted_max_temp_c, gem.temp_std_dev_c, gem.skewness) : null;
+      const gemFitEdge = (yesPct !== null && gemFp !== null) ? gemFp - yesPct : null;
+      // AIFS
+      const afRes       = nbmProb(aifsMembers, bracket);
+      const aifsPct     = afRes ? afRes.pct : null;
+      const aifsEdge    = (yesPct !== null && aifsPct !== null) ? aifsPct - yesPct : null;
+      const aifsFp      = aifs ? fitProb(bracket, aifs.predicted_max_temp_c, aifs.temp_std_dev_c, aifs.skewness) : null;
+      const aifsFitEdge = (yesPct !== null && aifsFp !== null) ? aifsFp - yesPct : null;
       // Polymarket market URL — deep-link to specific market if slug available, else event page
       const mktSlug   = mkt.slug || null;
       const pmUrl     = mktSlug
@@ -828,6 +895,28 @@ function renderResults() {
         ? (() => { const pNoWins = 1 - iconFp / 100, noCost = noPct / 100, ev = (1 - noCost) * pNoWins - noCost * (1 - pNoWins); return { ev, roi: ev / noCost, noCost, side: 'no' }; })()
         : null;
       const icFitRoi = icFitYesRoi || icFitNoRoi || null;
+      // GEM ROI
+      const gmYesRoi = (gemEdge !== null && gemEdge > 5 && yesPct !== null && gemPct !== null)
+        ? (() => { const p = gemPct/100, c = yesPct/100, ev = (1-c)*p - c*(1-p); return { ev, roi: ev/c, yesCost: c, side: 'yes' }; })() : null;
+      const gmNoRoi = (gemEdge !== null && gemEdge < -5 && noPct !== null && gemPct !== null)
+        ? (() => { const p = 1-gemPct/100, c = noPct/100, ev = (1-c)*p - c*(1-p); return { ev, roi: ev/c, noCost: c, side: 'no' }; })() : null;
+      const gmRawRoi = gmYesRoi || gmNoRoi || null;
+      const gmFitYesRoi = (gemFitEdge !== null && gemFitEdge > 5 && yesPct !== null && gemFp !== null)
+        ? (() => { const p = gemFp/100, c = yesPct/100, ev = (1-c)*p - c*(1-p); return { ev, roi: ev/c, yesCost: c, side: 'yes' }; })() : null;
+      const gmFitNoRoi = (gemFitEdge !== null && gemFitEdge < -5 && noPct !== null && gemFp !== null)
+        ? (() => { const p = 1-gemFp/100, c = noPct/100, ev = (1-c)*p - c*(1-p); return { ev, roi: ev/c, noCost: c, side: 'no' }; })() : null;
+      const gmFitRoi = gmFitYesRoi || gmFitNoRoi || null;
+      // AIFS ROI
+      const afYesRoi = (aifsEdge !== null && aifsEdge > 5 && yesPct !== null && aifsPct !== null)
+        ? (() => { const p = aifsPct/100, c = yesPct/100, ev = (1-c)*p - c*(1-p); return { ev, roi: ev/c, yesCost: c, side: 'yes' }; })() : null;
+      const afNoRoi = (aifsEdge !== null && aifsEdge < -5 && noPct !== null && aifsPct !== null)
+        ? (() => { const p = 1-aifsPct/100, c = noPct/100, ev = (1-c)*p - c*(1-p); return { ev, roi: ev/c, noCost: c, side: 'no' }; })() : null;
+      const afRawRoi = afYesRoi || afNoRoi || null;
+      const afFitYesRoi = (aifsFitEdge !== null && aifsFitEdge > 5 && yesPct !== null && aifsFp !== null)
+        ? (() => { const p = aifsFp/100, c = yesPct/100, ev = (1-c)*p - c*(1-p); return { ev, roi: ev/c, yesCost: c, side: 'yes' }; })() : null;
+      const afFitNoRoi = (aifsFitEdge !== null && aifsFitEdge < -5 && noPct !== null && aifsFp !== null)
+        ? (() => { const p = 1-aifsFp/100, c = noPct/100, ev = (1-c)*p - c*(1-p); return { ev, roi: ev/c, noCost: c, side: 'no' }; })() : null;
+      const afFitRoi = afFitYesRoi || afFitNoRoi || null;
       return { label, bracket, yesPct, noPct,
                meteoPct, meteoCount: res ? res.count : null, meteoN: res ? res.n : null, meteoEdge, rawRoi,
                matchGfsMembers,
@@ -838,10 +927,16 @@ function renderResults() {
                iconPct, iconCount: icRes ? icRes.count : null, iconN: icRes ? icRes.n : null, iconEdge, icRawRoi,
                matchIconMembers: (iconMembers && bracket) ? iconMembers.filter(memberFilter) : [],
                iconFitPct: iconFp, iconFitEdge, icFitRoi,
+               gemEdge, gmRawRoi, gemFitPct: gemFp, gemFitEdge, gmFitRoi,
+               aifsEdge, afRawRoi, aifsFitPct: aifsFp, aifsFitEdge, afFitRoi,
                tioPick: tomorrow ? tempInBracket(tomorrow.tmax_c, bracket) : false,
                tioTemp: tomorrow ? tomorrow.tmax_c : null,
                pwPick:  pirate  ? tempInBracket(pirate.tmax_c, bracket)   : false,
                pwTemp:  pirate  ? pirate.tmax_c  : null,
+               nwsPick: nws     ? tempInBracket(nws.tmax_c, bracket)      : false,
+               nwsTemp: nws     ? nws.tmax_c     : null,
+               omPick:  meteoDet ? tempInBracket(meteoDet.tmax_c, bracket) : false,
+               omTemp:  meteoDet ? meteoDet.tmax_c : null,
                pmUrl };
     });
 
@@ -920,8 +1015,18 @@ function renderResults() {
         <td class="text-end text-muted col-icon-fit-pct">—</td>
         <td class="text-center text-muted col-icon-fit-edge">—</td>
         <td class="text-end text-muted col-icon-fit-roi">—</td>
+        <td class="text-center text-muted col-gem-edge">—</td>
+        <td class="text-end text-muted col-gem-roi">—</td>
+        <td class="text-center text-muted col-gem-fit-edge">—</td>
+        <td class="text-end text-muted col-gem-fit-roi">—</td>
+        <td class="text-center text-muted col-aifs-edge">—</td>
+        <td class="text-end text-muted col-aifs-roi">—</td>
+        <td class="text-center text-muted col-aifs-fit-edge">—</td>
+        <td class="text-end text-muted col-aifs-fit-roi">—</td>
         <td class="text-center text-muted col-tio-pick">—</td>
         <td class="text-center text-muted col-pw-pick">—</td>
+        <td class="text-center text-muted col-nws-pick">—</td>
+        <td class="text-center text-muted col-om-pick">—</td>
       </tr>` : '';
 
     const tableBody = rows.length > 0
@@ -971,11 +1076,21 @@ function renderResults() {
             <td class="text-end col-icon-fit-pct">${pct(r.iconFitPct)}</td>
             <td class="text-center col-icon-fit-edge">${edgeBadge(r.iconFitEdge)}</td>
             <td class="text-end col-icon-fit-roi">${roiCell(r.icFitRoi)}</td>
+            <td class="text-center col-gem-edge">${edgeBadge(r.gemEdge)}</td>
+            <td class="text-end col-gem-roi">${roiCell(r.gmRawRoi)}</td>
+            <td class="text-center col-gem-fit-edge">${edgeBadge(r.gemFitEdge)}</td>
+            <td class="text-end col-gem-fit-roi">${roiCell(r.gmFitRoi)}</td>
+            <td class="text-center col-aifs-edge">${edgeBadge(r.aifsEdge)}</td>
+            <td class="text-end col-aifs-roi">${roiCell(r.afRawRoi)}</td>
+            <td class="text-center col-aifs-fit-edge">${edgeBadge(r.aifsFitEdge)}</td>
+            <td class="text-end col-aifs-fit-roi">${roiCell(r.afFitRoi)}</td>
             <td class="text-center col-tio-pick">${r.tioPick ? '<span class="badge bg-warning text-dark">YES</span>' : '<span class="text-muted">—</span>'}</td>
             <td class="text-center col-pw-pick">${r.pwPick ? '<span class="badge bg-info text-dark">YES</span>' : '<span class="text-muted">—</span>'}</td>
+            <td class="text-center col-nws-pick">${r.nwsPick ? '<span class="badge bg-success">YES</span>' : '<span class="text-muted">—</span>'}</td>
+            <td class="text-center col-om-pick">${r.omPick ? '<span class="badge bg-secondary">YES</span>' : '<span class="text-muted">—</span>'}</td>
           </tr>`;
         }).join('') + unaccountedRow
-      : `<tr><td colspan="29" class="ps-3 py-2 text-muted fst-italic">No Polymarket markets found for this date.</td></tr>`;
+      : `<tr><td colspan="41" class="ps-3 py-2 text-muted fst-italic">No Polymarket markets found for this date.</td></tr>`;
 
     const gfsSummary =
       `GFS\u2002\u03bc\u202f=\u202f${toDisp(gfs.predicted_max_temp_c).toFixed(1)}${unitStr}` +
@@ -996,6 +1111,18 @@ function renderResults() {
     const pmLabel = entry.pmSource === 'bq'
       ? `PM prices (BQ): ${fmtUTC(entry.pmTimestamp)}`
       : `PM prices (live): ${fmtUTC(entry.pmTimestamp)}`;
+    const gemSummary = gem
+      ? `\u2003GEM\u2002\u03bc\u202f=\u202f${toDisp(gem.predicted_max_temp_c).toFixed(1)}${unitStr}`
+      : '';
+    const aifsSummary = aifs
+      ? `\u2003AIFS\u2002\u03bc\u202f=\u202f${toDisp(aifs.predicted_max_temp_c).toFixed(1)}${unitStr}`
+      : '';
+    const nwsSummary = nws
+      ? `\u2003NWS\u2002${toDisp(nws.tmax_c).toFixed(1)}${unitStr}`
+      : '';
+    const omSummary = meteoDet
+      ? `\u2003OM\u2002${toDisp(meteoDet.tmax_c).toFixed(1)}${unitStr}`
+      : '';
     const tioSummary = tomorrow
       ? `\u2003TIO\u2002${toDisp(tomorrow.tmax_c).toFixed(1)}${unitStr}`
       : '';
@@ -1014,7 +1141,7 @@ function renderResults() {
       <div class="card-header bg-transparent d-flex align-items-center gap-2 flex-wrap py-2">
         <span class="fw-medium">${escHtml(dateLabel)}</span>
         <span class="badge bg-secondary">lead ${gfs.lead_days}d</span>
-        <span class="text-muted small ms-auto">${escHtml(gfsSummary + ecmwfSummary + iconSummary + tioSummary + pwSummary)}</span>
+        <span class="text-muted small ms-auto">${escHtml(gfsSummary + ecmwfSummary + iconSummary + gemSummary + aifsSummary + tioSummary + pwSummary + nwsSummary + omSummary)}</span>
         ${cityObj ? `<a href="${escHtml(openMeteoURL(cityObj))}" target="_blank" rel="noopener"
            class="text-muted small ms-2" title="View on Open-Meteo">
            <i class="bi bi-box-arrow-up-right"></i> Open-Meteo
@@ -1053,8 +1180,18 @@ function renderResults() {
                 <th class="text-end col-icon-fit-pct" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Skew-normal probability fitted to ICON ensemble mean, std dev, and skewness.">ICON Fit%</th>
                 <th class="text-center col-icon-fit-edge" data-bs-toggle="tooltip" data-bs-placement="bottom" title="ICON Fit% minus PM YES%. Edge using the analytical skew-normal estimate.">ICON Fit Edge</th>
                 <th class="text-end col-icon-fit-roi" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Expected ROI using ICON skew-normal fitted probability.">ICON Fit ROI</th>
+                <th class="text-center col-gem-edge" data-bs-toggle="tooltip" data-bs-placement="bottom" title="GEM Members% minus PM YES%">GEM Edge</th>
+                <th class="text-end col-gem-roi" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Expected ROI using GEM raw member probabilities">GEM ROI</th>
+                <th class="text-center col-gem-fit-edge" data-bs-toggle="tooltip" data-bs-placement="bottom" title="GEM Fit% minus PM YES%">GEM Fit Edge</th>
+                <th class="text-end col-gem-fit-roi" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Expected ROI using GEM fitted probability">GEM Fit ROI</th>
+                <th class="text-center col-aifs-edge" data-bs-toggle="tooltip" data-bs-placement="bottom" title="AIFS Members% minus PM YES%">AIFS Edge</th>
+                <th class="text-end col-aifs-roi" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Expected ROI using AIFS raw member probabilities">AIFS ROI</th>
+                <th class="text-center col-aifs-fit-edge" data-bs-toggle="tooltip" data-bs-placement="bottom" title="AIFS Fit% minus PM YES%">AIFS Fit Edge</th>
+                <th class="text-end col-aifs-fit-roi" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Expected ROI using AIFS fitted probability">AIFS Fit ROI</th>
                 <th class="text-center col-tio-pick" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Tomorrow.io predicted high — shows which bracket the point forecast falls in">TIO</th>
                 <th class="text-center col-pw-pick" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Pirate Weather predicted high — shows which bracket the point forecast falls in">PW</th>
+                <th class="text-center col-nws-pick" data-bs-toggle="tooltip" data-bs-placement="bottom" title="NWS (Weather.gov) predicted high — US cities only">NWS</th>
+                <th class="text-center col-om-pick" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Open-Meteo deterministic best-match predicted high">OM</th>
               </tr>
             </thead>
             <tbody>${tableBody}</tbody>
