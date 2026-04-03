@@ -68,19 +68,9 @@
                 onchange="onRunChange()"></select>
       </div>
       <div class="col-sm-auto">
-        <label class="form-label small fw-medium mb-1">PM Source</label>
-        <div class="btn-group btn-group-sm" role="group">
-          <input type="radio" class="btn-check" name="pm-source" id="pm-src-bq"
-                 value="bq" checked onchange="onRunChange()">
-          <label class="btn btn-outline-secondary" for="pm-src-bq">
-            <i class="bi bi-database me-1"></i>BQ (aligned)
-          </label>
-          <input type="radio" class="btn-check" name="pm-source" id="pm-src-live"
-                 value="live" onchange="onRunChange()">
-          <label class="btn btn-outline-secondary" for="pm-src-live">
-            <i class="bi bi-wifi me-1"></i>Live
-          </label>
-        </div>
+        <label class="form-label small fw-medium mb-1" for="sel-pm-time">PM Snapshot</label>
+        <select class="form-select form-select-sm" id="sel-pm-time" style="min-width:200px"
+                onchange="onRunChange()"></select>
       </div>
     </div>
   </div>
@@ -442,7 +432,43 @@ function distinctRuns(rows) {
   return [...seen].sort((a, b) => (a > b ? -1 : 1)); // latest first
 }
 
-// Called when a run selector or PM source radio changes.
+// Fetch distinct PM snapshot timestamps for a city+date.
+async function fetchPMSnapshotTimes(city, date) {
+  try {
+    const times = await api('GET',
+      `/polymarket-snapshot-times?city=${encodeURIComponent(city)}&date=${date}`);
+    return Array.isArray(times) ? times : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+// Populate the PM snapshot selector with BQ times + Live option.
+function populatePMSelector(times) {
+  const sel = document.getElementById('sel-pm-time');
+  const prev = sel.value;
+  sel.innerHTML = '';
+  // Add BQ snapshot times (latest first)
+  times.forEach(t => {
+    const opt = document.createElement('option');
+    opt.value = t;
+    opt.textContent = fmtUTC(t);
+    sel.appendChild(opt);
+  });
+  // Add Live option at the end
+  const liveOpt = document.createElement('option');
+  liveOpt.value = 'live';
+  liveOpt.textContent = 'Live (current)';
+  sel.appendChild(liveOpt);
+  // Restore previous selection if available, else default to latest BQ (first)
+  if (prev && [...sel.options].some(o => o.value === prev)) {
+    sel.value = prev;
+  } else {
+    sel.value = times.length > 0 ? times[0] : 'live';
+  }
+}
+
+// Called when a run selector or PM snapshot changes.
 async function onRunChange() {
   if (allGfsRows.length === 0) return;
   await renderWithCurrentSelections();
@@ -529,6 +555,18 @@ async function loadComparison() {
     populateRunSelector('sel-gfs-run',   distinctRuns(allGfsRows));
     populateRunSelector('sel-ecmwf-run', distinctRuns(allEcmwfRows));
     populateRunSelector('sel-icon-run',  distinctRuns(allIconRows));
+
+    // Populate PM snapshot time selector from first target date
+    const firstTargetDate = Object.keys(
+      (() => { const m = {}; allGfsRows.forEach(r => { m[r.target_date] = 1; }); return m; })()
+    ).sort()[0];
+    if (firstTargetDate) {
+      const pmTimes = await fetchPMSnapshotTimes(city, firstTargetDate);
+      populatePMSelector(pmTimes);
+    } else {
+      populatePMSelector([]);
+    }
+
     runSelectorsRow.classList.remove('d-none');
 
     loadingEl.classList.add('d-none');
@@ -544,7 +582,8 @@ async function renderWithCurrentSelections() {
   const gfsRun    = document.getElementById('sel-gfs-run').value;
   const ecmwfRun  = document.getElementById('sel-ecmwf-run').value;
   const iconRun   = document.getElementById('sel-icon-run').value;
-  const pmSource  = document.querySelector('input[name="pm-source"]:checked')?.value || 'bq';
+  const pmTimeVal = document.getElementById('sel-pm-time').value;
+  const pmSource  = pmTimeVal === 'live' ? 'live' : 'bq';
 
   const loadingEl = document.getElementById('loading');
   const emptyEl   = document.getElementById('empty-state');
@@ -574,11 +613,11 @@ async function renderWithCurrentSelections() {
   pmFetchedAt = new Date().toISOString();
   const liveMarketsList = await Promise.all(targetDates.map(d => fetchPolyMarkets(city, d)));
 
-  // For BQ mode: fetch snapshot prices aligned to the selected GFS run time
+  // For BQ mode: fetch snapshot prices at the selected PM snapshot time
   let bqSnapsByDate = {};
-  if (pmSource === 'bq' && gfsRun) {
+  if (pmSource === 'bq' && pmTimeVal) {
     const bqResults = await Promise.all(
-      targetDates.map(d => fetchPolyMarketsBQ(city, d, gfsRun))
+      targetDates.map(d => fetchPolyMarketsBQ(city, d, pmTimeVal))
     );
     targetDates.forEach((d, i) => { bqSnapsByDate[d] = bqResults[i]; });
   }
