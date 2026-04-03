@@ -280,6 +280,15 @@ function nbmProb(members, bracket) {
   return { count, n, pct: (count / n) * 100 };
 }
 
+// Check if a deterministic temp (°C) falls within a parsed bracket.
+function tempInBracket(tempC, bracket) {
+  if (tempC == null || !bracket) return false;
+  if (bracket.type === 'range') return tempC >= bracket.lo && tempC < bracket.hi;
+  if (bracket.type === 'above') return tempC >= bracket.lo;
+  if (bracket.type === 'below') return tempC < bracket.hi;
+  return false;
+}
+
 // ── Polymarket (via backend proxy to avoid CORS) ───────────────────────────
 // Returns the markets array for a given city + date, or [] if not found.
 async function fetchPolyMarkets(city, targetDate) {
@@ -357,6 +366,8 @@ let pmFetchedAt = null;
 let allGfsRows   = [];   // all rows returned for the selected forecast_date
 let allEcmwfRows = [];
 let allIconRows  = [];
+let allTomorrowRows = [];  // deterministic point forecasts
+let allPirateRows   = [];
 
 // Format an ISO timestamp as "YYYY-MM-DD HH:MM UTC"
 function fmtUTC(iso) {
@@ -502,6 +513,8 @@ const COLS = [
   { key: 'icon-fit-pct',   label: 'ICON Fit%',            group: 'ICON Fit',   on: false },
   { key: 'icon-fit-edge',  label: 'ICON Fit Edge',        group: 'ICON Fit',   on: true  },
   { key: 'icon-fit-roi',   label: 'ICON Fit ROI',         group: 'ICON Fit',   on: true  },
+  { key: 'tio-pick',       label: 'Tomorrow.io',          group: 'Deterministic', on: true  },
+  { key: 'pw-pick',        label: 'Pirate Weather',       group: 'Deterministic', on: true  },
 ];
 
 function applyColumnVisibility() {
@@ -533,11 +546,13 @@ async function loadComparison() {
     const params = { city };
     if (forecastDate) params.forecast_date = forecastDate;
 
-    // Fetch ALL GFS, ECMWF, and ICON rows for the day (multiple model runs included)
-    const [gfsRows, ecmwfRows, iconRows] = await Promise.all([
+    // Fetch ALL GFS, ECMWF, ICON, and deterministic rows for the day
+    const [gfsRows, ecmwfRows, iconRows, tomorrowRows, pirateRows] = await Promise.all([
       api('GET', '/meteo-gfs-forecasts' + qs(params)),
       api('GET', '/meteo-ecmwf-forecasts' + qs(params)).catch(() => []),
       api('GET', '/meteo-icon-forecasts' + qs(params)).catch(() => []),
+      api('GET', '/tomorrow-forecasts' + qs(params)).catch(() => []),
+      api('GET', '/pirate-weather-forecasts' + qs(params)).catch(() => []),
     ]);
 
     if (!gfsRows || gfsRows.length === 0) {
@@ -547,9 +562,11 @@ async function loadComparison() {
       return;
     }
 
-    allGfsRows   = gfsRows;
-    allEcmwfRows = ecmwfRows || [];
-    allIconRows  = iconRows  || [];
+    allGfsRows      = gfsRows;
+    allEcmwfRows    = ecmwfRows    || [];
+    allIconRows     = iconRows     || [];
+    allTomorrowRows = tomorrowRows || [];
+    allPirateRows   = pirateRows   || [];
 
     // Populate run selectors (latest first = default)
     populateRunSelector('sel-gfs-run',   distinctRuns(allGfsRows));
@@ -607,6 +624,13 @@ async function renderWithCurrentSelections() {
   ecmwfFiltered.forEach(r => { if (!ecmwfByDate[r.target_date]) ecmwfByDate[r.target_date] = r; });
   const iconByDate = {};
   iconFiltered.forEach(r => { if (!iconByDate[r.target_date]) iconByDate[r.target_date] = r; });
+  // Deterministic sources: use latest row per target_date (no run selector)
+  const tomorrowByDate = {};
+  [...allTomorrowRows].sort((a, b) => (a.model_run_at > b.model_run_at ? -1 : 1))
+    .forEach(r => { if (!tomorrowByDate[r.target_date]) tomorrowByDate[r.target_date] = r; });
+  const pirateByDate = {};
+  [...allPirateRows].sort((a, b) => (a.model_run_at > b.model_run_at ? -1 : 1))
+    .forEach(r => { if (!pirateByDate[r.target_date]) pirateByDate[r.target_date] = r; });
   const targetDates = Object.keys(gfsByDate).sort();
 
   // Fetch live market structure (question text + slugs) for every target date
@@ -637,7 +661,9 @@ async function renderWithCurrentSelections() {
       date:        d,
       gfs:         gfsByDate[d],
       ecmwf:       ecmwfByDate[d] || null,
-      icon:        iconByDate[d]  || null,
+      icon:        iconByDate[d]     || null,
+      tomorrow:    tomorrowByDate[d] || null,
+      pirate:      pirateByDate[d]   || null,
       markets,
       pmTimestamp: pmTs,
       pmSource,
@@ -705,7 +731,7 @@ function renderResults() {
   const cityObj  = CITIES.find(c => c.slug === citySlug);
 
   _combined.forEach(entry => {
-    const { date, gfs, ecmwf, icon, markets } = entry; // pmTimestamp and pmSource read directly from entry below
+    const { date, gfs, ecmwf, icon, tomorrow, pirate, markets } = entry;
     const members = (gfs.member_temps && gfs.member_temps.length) ? gfs.member_temps : null;
     const ecmwfMembers = (ecmwf && ecmwf.member_temps && ecmwf.member_temps.length) ? ecmwf.member_temps : null;
     const iconMembers  = (icon && icon.member_temps && icon.member_temps.length) ? icon.member_temps : null;
@@ -812,6 +838,10 @@ function renderResults() {
                iconPct, iconCount: icRes ? icRes.count : null, iconN: icRes ? icRes.n : null, iconEdge, icRawRoi,
                matchIconMembers: (iconMembers && bracket) ? iconMembers.filter(memberFilter) : [],
                iconFitPct: iconFp, iconFitEdge, icFitRoi,
+               tioPick: tomorrow ? tempInBracket(tomorrow.tmax_c, bracket) : false,
+               tioTemp: tomorrow ? tomorrow.tmax_c : null,
+               pwPick:  pirate  ? tempInBracket(pirate.tmax_c, bracket)   : false,
+               pwTemp:  pirate  ? pirate.tmax_c  : null,
                pmUrl };
     });
 
@@ -890,6 +920,8 @@ function renderResults() {
         <td class="text-end text-muted col-icon-fit-pct">—</td>
         <td class="text-center text-muted col-icon-fit-edge">—</td>
         <td class="text-end text-muted col-icon-fit-roi">—</td>
+        <td class="text-center text-muted col-tio-pick">—</td>
+        <td class="text-center text-muted col-pw-pick">—</td>
       </tr>` : '';
 
     const tableBody = rows.length > 0
@@ -939,9 +971,11 @@ function renderResults() {
             <td class="text-end col-icon-fit-pct">${pct(r.iconFitPct)}</td>
             <td class="text-center col-icon-fit-edge">${edgeBadge(r.iconFitEdge)}</td>
             <td class="text-end col-icon-fit-roi">${roiCell(r.icFitRoi)}</td>
+            <td class="text-center col-tio-pick">${r.tioPick ? '<span class="badge bg-warning text-dark">YES</span>' : '<span class="text-muted">—</span>'}</td>
+            <td class="text-center col-pw-pick">${r.pwPick ? '<span class="badge bg-info text-dark">YES</span>' : '<span class="text-muted">—</span>'}</td>
           </tr>`;
         }).join('') + unaccountedRow
-      : `<tr><td colspan="27" class="ps-3 py-2 text-muted fst-italic">No Polymarket markets found for this date.</td></tr>`;
+      : `<tr><td colspan="29" class="ps-3 py-2 text-muted fst-italic">No Polymarket markets found for this date.</td></tr>`;
 
     const gfsSummary =
       `GFS\u2002\u03bc\u202f=\u202f${toDisp(gfs.predicted_max_temp_c).toFixed(1)}${unitStr}` +
@@ -962,6 +996,12 @@ function renderResults() {
     const pmLabel = entry.pmSource === 'bq'
       ? `PM prices (BQ): ${fmtUTC(entry.pmTimestamp)}`
       : `PM prices (live): ${fmtUTC(entry.pmTimestamp)}`;
+    const tioSummary = tomorrow
+      ? `\u2003TIO\u2002${toDisp(tomorrow.tmax_c).toFixed(1)}${unitStr}`
+      : '';
+    const pwSummary = pirate
+      ? `\u2003PW\u2002${toDisp(pirate.tmax_c).toFixed(1)}${unitStr}`
+      : '';
     const timestampLine =
       `GFS run: ${fmtUTC(gfs.model_run_at)}` +
       (ecmwf ? `\u2003ECMWF run: ${fmtUTC(ecmwf.model_run_at)}` : '') +
@@ -974,7 +1014,7 @@ function renderResults() {
       <div class="card-header bg-transparent d-flex align-items-center gap-2 flex-wrap py-2">
         <span class="fw-medium">${escHtml(dateLabel)}</span>
         <span class="badge bg-secondary">lead ${gfs.lead_days}d</span>
-        <span class="text-muted small ms-auto">${escHtml(gfsSummary + ecmwfSummary + iconSummary)}</span>
+        <span class="text-muted small ms-auto">${escHtml(gfsSummary + ecmwfSummary + iconSummary + tioSummary + pwSummary)}</span>
         ${cityObj ? `<a href="${escHtml(openMeteoURL(cityObj))}" target="_blank" rel="noopener"
            class="text-muted small ms-2" title="View on Open-Meteo">
            <i class="bi bi-box-arrow-up-right"></i> Open-Meteo
@@ -1013,6 +1053,8 @@ function renderResults() {
                 <th class="text-end col-icon-fit-pct" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Skew-normal probability fitted to ICON ensemble mean, std dev, and skewness.">ICON Fit%</th>
                 <th class="text-center col-icon-fit-edge" data-bs-toggle="tooltip" data-bs-placement="bottom" title="ICON Fit% minus PM YES%. Edge using the analytical skew-normal estimate.">ICON Fit Edge</th>
                 <th class="text-end col-icon-fit-roi" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Expected ROI using ICON skew-normal fitted probability.">ICON Fit ROI</th>
+                <th class="text-center col-tio-pick" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Tomorrow.io predicted high — shows which bracket the point forecast falls in">TIO</th>
+                <th class="text-center col-pw-pick" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Pirate Weather predicted high — shows which bracket the point forecast falls in">PW</th>
               </tr>
             </thead>
             <tbody>${tableBody}</tbody>
