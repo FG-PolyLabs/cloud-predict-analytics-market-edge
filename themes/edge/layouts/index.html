@@ -290,6 +290,32 @@ function nbmProb(members, bracket) {
   return { count, n, pct: (count / n) * 100 };
 }
 
+// Build a multi-model ensemble (MME) from all available source predictions for a date.
+// Each model contributes one "member" — its predicted daily high in °C.
+// Returns { members: number[], mean, stddev, skewness } or null if <2 models available.
+function buildMME(entry) {
+  const vals = [];
+  if (entry.gfs)      vals.push(entry.gfs.predicted_max_temp_c);
+  if (entry.ecmwf)    vals.push(entry.ecmwf.predicted_max_temp_c);
+  if (entry.icon)     vals.push(entry.icon.predicted_max_temp_c);
+  if (entry.gem)      vals.push(entry.gem.predicted_max_temp_c);
+  if (entry.aifs)     vals.push(entry.aifs.predicted_max_temp_c);
+  if (entry.tomorrow) vals.push(entry.tomorrow.tmax_c);
+  if (entry.pirate)   vals.push(entry.pirate.tmax_c);
+  if (entry.nws)      vals.push(entry.nws.tmax_c);
+  if (entry.meteoDet) vals.push(entry.meteoDet.tmax_c);
+  if (entry.wu)       vals.push(entry.wu.tmax_c);
+  if (vals.length < 2) return null;
+  const n = vals.length;
+  const mean = vals.reduce((s, v) => s + v, 0) / n;
+  const variance = vals.reduce((s, v) => s + (v - mean) ** 2, 0) / (n - 1);
+  const sd = Math.sqrt(variance);
+  const skew = sd > 0 && n >= 3
+    ? vals.reduce((s, v) => s + ((v - mean) / sd) ** 3, 0) / n
+    : 0;
+  return { members: vals, mean, stddev: sd, skewness: skew };
+}
+
 // Check if a deterministic temp (°C) falls within a parsed bracket.
 function tempInBracket(tempC, bracket) {
   if (tempC == null || !bracket) return false;
@@ -541,6 +567,11 @@ const COLS = [
   { key: 'nws-pick',       label: 'NWS',                  group: 'Deterministic', on: true  },
   { key: 'om-pick',        label: 'Open-Meteo',           group: 'Deterministic', on: true  },
   { key: 'wu-pick',        label: 'Weather Underground',  group: 'Settlement',    on: true  },
+  { key: 'mme-pct',        label: 'MME Models%',          group: 'MME',           on: false },
+  { key: 'mme-edge',       label: 'MME Edge',             group: 'MME',           on: true  },
+  { key: 'mme-roi',        label: 'MME ROI',              group: 'MME',           on: true  },
+  { key: 'mme-fit-edge',   label: 'MME Fit Edge',         group: 'MME Fit',       on: true  },
+  { key: 'mme-fit-roi',    label: 'MME Fit ROI',          group: 'MME Fit',       on: true  },
 ];
 
 function applyColumnVisibility() {
@@ -725,11 +756,15 @@ async function renderWithCurrentSelections() {
       nws:         nwsByDate[d]      || null,
       meteoDet:    meteoDetByDate[d] || null,
       wu:          wuByDate[d]       || null,
+      mme:         null, // computed below after entry is built
       markets,
       pmTimestamp: pmTs,
       pmSource,
     };
   });
+
+  // Compute MME for each entry now that all fields are populated
+  _combined.forEach(entry => { entry.mme = buildMME(entry); });
 
   loadingEl.classList.add('d-none');
   if (_combined.length === 0) {
@@ -792,7 +827,7 @@ function renderResults() {
   const cityObj  = CITIES.find(c => c.slug === citySlug);
 
   _combined.forEach(entry => {
-    const { date, gfs, ecmwf, icon, gem, aifs, tomorrow, pirate, nws, meteoDet, wu, markets } = entry;
+    const { date, gfs, ecmwf, icon, gem, aifs, tomorrow, pirate, nws, meteoDet, wu, mme, markets } = entry;
     const members = (gfs.member_temps && gfs.member_temps.length) ? gfs.member_temps : null;
     const ecmwfMembers = (ecmwf && ecmwf.member_temps && ecmwf.member_temps.length) ? ecmwf.member_temps : null;
     const iconMembers  = (icon && icon.member_temps && icon.member_temps.length) ? icon.member_temps : null;
@@ -947,6 +982,12 @@ function renderResults() {
                omTemp:  meteoDet ? meteoDet.tmax_c : null,
                wuPick:  wu       ? tempInBracket(wu.tmax_c, bracket)       : false,
                wuTemp:  wu       ? wu.tmax_c       : null,
+               mmePct:  (() => { if (!mme) return null; const r = nbmProb(mme.members, bracket); return r ? r.pct : null; })(),
+               mmeEdge: (() => { if (!mme) return null; const r = nbmProb(mme.members, bracket); return (yesPct !== null && r) ? r.pct - yesPct : null; })(),
+               mmeFitPct: mme ? fitProb(bracket, mme.mean, mme.stddev, mme.skewness) : null,
+               mmeFitEdge: (() => { if (!mme) return null; const fp = fitProb(bracket, mme.mean, mme.stddev, mme.skewness); return (yesPct !== null && fp !== null) ? fp - yesPct : null; })(),
+               mmeRawRoi: (() => { if (!mme) return null; const r = nbmProb(mme.members, bracket); if (!r) return null; const edge = r.pct - (yesPct||0); if (Math.abs(edge) <= 5 || yesPct === null) return null; if (edge > 0) { const p=r.pct/100,c=yesPct/100,ev=(1-c)*p-c*(1-p); return {ev,roi:ev/c,yesCost:c,side:'yes'}; } else { const p=1-r.pct/100,c=(noPct||0)/100; if(c<=0)return null; const ev=(1-c)*p-c*(1-p); return {ev,roi:ev/c,noCost:c,side:'no'}; } })(),
+               mmeFitRoi: (() => { if (!mme) return null; const fp = fitProb(bracket, mme.mean, mme.stddev, mme.skewness); if (fp===null||yesPct===null) return null; const edge=fp-yesPct; if(Math.abs(edge)<=5) return null; if(edge>0){const p=fp/100,c=yesPct/100,ev=(1-c)*p-c*(1-p);return{ev,roi:ev/c,yesCost:c,side:'yes'};} else{const p=1-fp/100,c=(noPct||0)/100;if(c<=0)return null;const ev=(1-c)*p-c*(1-p);return{ev,roi:ev/c,noCost:c,side:'no'};} })(),
                pmUrl };
     });
 
@@ -1038,6 +1079,11 @@ function renderResults() {
         <td class="text-center text-muted col-nws-pick">—</td>
         <td class="text-center text-muted col-om-pick">—</td>
         <td class="text-center text-muted col-wu-pick">—</td>
+        <td class="text-end text-muted col-mme-pct">—</td>
+        <td class="text-center text-muted col-mme-edge">—</td>
+        <td class="text-end text-muted col-mme-roi">—</td>
+        <td class="text-center text-muted col-mme-fit-edge">—</td>
+        <td class="text-end text-muted col-mme-fit-roi">—</td>
       </tr>` : '';
 
     const tableBody = rows.length > 0
@@ -1100,9 +1146,14 @@ function renderResults() {
             <td class="text-center col-nws-pick">${r.nwsPick ? '<span class="badge bg-success">YES</span>' : '<span class="text-muted">—</span>'}</td>
             <td class="text-center col-om-pick">${r.omPick ? '<span class="badge bg-secondary">YES</span>' : '<span class="text-muted">—</span>'}</td>
             <td class="text-center col-wu-pick">${r.wuPick ? '<span class="badge bg-danger">YES</span>' : '<span class="text-muted">—</span>'}</td>
+            <td class="text-end col-mme-pct">${pct(r.mmePct)}</td>
+            <td class="text-center col-mme-edge">${edgeBadge(r.mmeEdge)}</td>
+            <td class="text-end col-mme-roi">${roiCell(r.mmeRawRoi)}</td>
+            <td class="text-center col-mme-fit-edge">${edgeBadge(r.mmeFitEdge)}</td>
+            <td class="text-end col-mme-fit-roi">${roiCell(r.mmeFitRoi)}</td>
           </tr>`;
         }).join('') + unaccountedRow
-      : `<tr><td colspan="42" class="ps-3 py-2 text-muted fst-italic">No Polymarket markets found for this date.</td></tr>`;
+      : `<tr><td colspan="47" class="ps-3 py-2 text-muted fst-italic">No Polymarket markets found for this date.</td></tr>`;
 
     const gfsSummary =
       `GFS\u2002\u03bc\u202f=\u202f${toDisp(gfs.predicted_max_temp_c).toFixed(1)}${unitStr}` +
@@ -1135,6 +1186,9 @@ function renderResults() {
     const omSummary = meteoDet
       ? `\u2003OM\u2002${toDisp(meteoDet.tmax_c).toFixed(1)}${unitStr}`
       : '';
+    const mmeSummary = mme
+      ? `\u2003MME\u2002\u03bc\u202f=\u202f${toDisp(mme.mean).toFixed(1)}${unitStr}\u2002\u03c3\u202f=\u202f${toDispDelta(mme.stddev).toFixed(1)}${unitStr}\u2002(${mme.members.length} models)`
+      : '';
     const wuSummary = wu
       ? `\u2003WU\u2002${toDisp(wu.tmax_c).toFixed(1)}${unitStr}`
       : '';
@@ -1156,7 +1210,7 @@ function renderResults() {
       <div class="card-header bg-transparent d-flex align-items-center gap-2 flex-wrap py-2">
         <span class="fw-medium">${escHtml(dateLabel)}</span>
         <span class="badge bg-secondary">lead ${gfs.lead_days}d</span>
-        <span class="text-muted small ms-auto">${escHtml(gfsSummary + ecmwfSummary + iconSummary + gemSummary + aifsSummary + wuSummary + tioSummary + pwSummary + nwsSummary + omSummary)}</span>
+        <span class="text-muted small ms-auto">${escHtml(gfsSummary + ecmwfSummary + iconSummary + gemSummary + aifsSummary + mmeSummary + wuSummary + tioSummary + pwSummary + nwsSummary + omSummary)}</span>
         ${cityObj ? `<a href="${escHtml(openMeteoURL(cityObj))}" target="_blank" rel="noopener"
            class="text-muted small ms-2" title="View on Open-Meteo">
            <i class="bi bi-box-arrow-up-right"></i> Open-Meteo
@@ -1208,6 +1262,11 @@ function renderResults() {
                 <th class="text-center col-nws-pick" data-bs-toggle="tooltip" data-bs-placement="bottom" title="NWS (Weather.gov) predicted high — US cities only">NWS</th>
                 <th class="text-center col-om-pick" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Open-Meteo deterministic best-match predicted high">OM</th>
                 <th class="text-center col-wu-pick" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Weather Underground predicted high — this is the Polymarket settlement source">WU</th>
+                <th class="text-end col-mme-pct" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Multi-Model Ensemble: fraction of all 10+ models whose predicted high falls in this bracket">MME%</th>
+                <th class="text-center col-mme-edge" data-bs-toggle="tooltip" data-bs-placement="bottom" title="MME% minus PM YES%. Consensus edge across all models.">MME Edge</th>
+                <th class="text-end col-mme-roi" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Expected ROI using MME model-count probability">MME ROI</th>
+                <th class="text-center col-mme-fit-edge" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Skew-normal fit across all model predictions. Edge vs PM YES%.">MME Fit Edge</th>
+                <th class="text-end col-mme-fit-roi" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Expected ROI using MME fitted probability">MME Fit ROI</th>
               </tr>
             </thead>
             <tbody>${tableBody}</tbody>
