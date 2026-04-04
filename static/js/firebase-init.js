@@ -28,14 +28,23 @@ async function signInWithGoogle() {
   }
 }
 
+function normalizeEmail(email) {
+  const lower = email.toLowerCase().trim();
+  const [local, domain] = lower.split('@');
+  if (domain === 'gmail.com' || domain === 'googlemail.com') {
+    return local.replace(/\./g, '') + '@' + domain;
+  }
+  return lower;
+}
+
 function isEmailAllowed(email) {
   let raw = window.ALLOWED_EMAILS || [];
   if (typeof raw === 'string') {
     try { raw = JSON.parse(raw); } catch (_) { raw = raw.split(','); }
   }
-  const allowed = raw.map(e => e.trim().toLowerCase()).filter(Boolean);
+  const allowed = raw.map(e => normalizeEmail(e)).filter(Boolean);
   if (allowed.length === 0) return true;
-  return allowed.includes(email.toLowerCase());
+  return allowed.includes(normalizeEmail(email));
 }
 
 firebase.auth().onAuthStateChanged(user => {
