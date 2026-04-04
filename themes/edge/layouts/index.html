@@ -19,6 +19,25 @@
   <i class="bi bi-lock me-1"></i>Your account is not authorized. Contact the administrator.
 </div>
 
+<!-- Tab navigation -->
+<ul class="nav nav-tabs mb-3 d-none" id="main-tabs" role="tablist">
+  <li class="nav-item" role="presentation">
+    <button class="nav-link active" id="tab-edge" data-bs-toggle="tab" data-bs-target="#pane-edge"
+            type="button" role="tab" aria-selected="true">
+      <i class="bi bi-graph-up-arrow me-1"></i>Market Edge
+    </button>
+  </li>
+  <li class="nav-item" role="presentation">
+    <button class="nav-link" id="tab-accuracy" data-bs-toggle="tab" data-bs-target="#pane-accuracy"
+            type="button" role="tab" aria-selected="false" onclick="loadAccuracyTab()">
+      <i class="bi bi-trophy me-1"></i>Model Accuracy
+    </button>
+  </li>
+</ul>
+
+<div class="tab-content">
+<div class="tab-pane fade show active" id="pane-edge" role="tabpanel">
+
 <!-- Controls -->
 <div class="card shadow-sm border-0 mb-3 d-none" id="controls-card">
   <div class="card-body py-3">
@@ -125,6 +144,69 @@
 
 <!-- Per-date tables (injected by JS) -->
 <div id="results-area"></div>
+
+</div><!-- /pane-edge -->
+
+<!-- Accuracy tab pane -->
+<div class="tab-pane fade" id="pane-accuracy" role="tabpanel">
+  <div class="card shadow-sm border-0 mb-3">
+    <div class="card-header bg-transparent border-bottom-0 pt-3 pb-0 d-flex align-items-center gap-3 flex-wrap">
+      <span class="fw-medium small"><i class="bi bi-trophy me-1"></i>Model Scoreboard</span>
+      <select class="form-select form-select-sm" id="acc-city-sel" style="max-width:180px"
+              onchange="loadAccuracyTab()">
+        <option value="">All cities</option>
+      </select>
+      <select class="form-select form-select-sm" id="acc-lead-sel" style="max-width:120px"
+              onchange="loadAccuracyTab()">
+        <option value="">All lead days</option>
+      </select>
+      <span class="text-muted small" id="acc-subtitle"></span>
+    </div>
+    <div class="card-body p-0">
+      <div id="acc-loading" class="text-center py-4 d-none">
+        <div class="spinner-border spinner-border-sm text-primary" role="status"></div>
+      </div>
+      <div id="acc-empty" class="text-center py-4 d-none">
+        <p class="text-muted small mb-0">No accuracy data yet. Models need resolved target dates with actuals.</p>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0 small d-none" id="acc-table">
+          <thead class="table-light">
+            <tr>
+              <th class="ps-3">#</th>
+              <th>Model</th>
+              <th data-bs-toggle="tooltip" title="Mean Absolute Error — average forecast miss in degrees. Lower is better." style="cursor:help">MAE</th>
+              <th data-bs-toggle="tooltip" title="Root Mean Square Error — penalizes large misses more. If much larger than MAE, model has occasional big errors." style="cursor:help">RMSE</th>
+              <th data-bs-toggle="tooltip" title="Average signed error. Positive = runs warm, negative = runs cold." style="cursor:help">Bias</th>
+              <th data-bs-toggle="tooltip" title="Number of resolved forecast-vs-actual comparisons." style="cursor:help">n</th>
+            </tr>
+          </thead>
+          <tbody id="acc-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="row g-3">
+    <div class="col-lg-6">
+      <div class="card shadow-sm border-0 d-none" id="acc-bar-card">
+        <div class="card-header bg-transparent border-bottom-0 pt-3 pb-0">
+          <p class="text-muted small mb-0">MAE by model — lower is better</p>
+        </div>
+        <div class="card-body"><canvas id="acc-bar-chart" style="max-height:350px"></canvas></div>
+      </div>
+    </div>
+    <div class="col-lg-6">
+      <div class="card shadow-sm border-0 d-none" id="acc-lead-card">
+        <div class="card-header bg-transparent border-bottom-0 pt-3 pb-0">
+          <p class="text-muted small mb-0">MAE by lead days — accuracy degradation</p>
+        </div>
+        <div class="card-body"><canvas id="acc-lead-chart" style="max-height:350px"></canvas></div>
+      </div>
+    </div>
+  </div>
+</div><!-- /pane-accuracy -->
+
+</div><!-- /tab-content -->
 
 {{ end }}
 
@@ -396,6 +478,7 @@ firebase.auth().onAuthStateChanged(user => {
   }
 
   controlsEl.classList.remove('d-none');
+  document.getElementById('main-tabs').classList.remove('d-none');
 
   const sel = document.getElementById('sel-city');
   CITIES.forEach(c => {
@@ -403,6 +486,27 @@ firebase.auth().onAuthStateChanged(user => {
     opt.value = c.slug;
     opt.textContent = c.label;
     sel.appendChild(opt);
+  });
+
+  // Populate accuracy tab city selector
+  const accCitySel = document.getElementById('acc-city-sel');
+  CITIES.forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = c.slug;
+    opt.textContent = c.label;
+    accCitySel.appendChild(opt);
+  });
+  const accLeadSel = document.getElementById('acc-lead-sel');
+  for (let i = 1; i <= 15; i++) {
+    const opt = document.createElement('option');
+    opt.value = i;
+    opt.textContent = `${i} day${i > 1 ? 's' : ''}`;
+    accLeadSel.appendChild(opt);
+  }
+
+  // Init tooltips for accuracy table
+  document.querySelectorAll('#pane-accuracy [data-bs-toggle="tooltip"]').forEach(el => {
+    new bootstrap.Tooltip(el, { trigger: 'hover' });
   });
 
   document.getElementById('inp-forecast-date').value = new Date().toISOString().slice(0, 10);
@@ -1535,5 +1639,161 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 });
+
+// ── Accuracy Tab ────────────────────────────────────────────────────────────
+const FAHRENHEIT_CITIES = new Set(['chicago', 'dallas', 'miami', 'nyc']);
+const ACC_COLORS = {
+  gfs: '#0d6efd', ecmwf: '#6f42c1', icon: '#198754', gem: '#fd7e14', aifs: '#d63384',
+  nbm_noaa: '#20c997', tomorrow: '#ffc107', pirate: '#0dcaf0', nws: '#6610f2',
+  open_meteo: '#dc3545', wunderground: '#795548',
+};
+const ACC_ENSEMBLE = new Set(['gfs', 'ecmwf', 'icon', 'gem', 'aifs']);
+let accBarChart = null, accLeadChart = null, accLoaded = false;
+
+function accUnit() {
+  const city = document.getElementById('acc-city-sel').value;
+  return (city && FAHRENHEIT_CITIES.has(city)) ? '°F' : '°C';
+}
+function accConv(c) {
+  return accUnit() === '°F' ? c * 9/5 : c;
+}
+
+async function loadAccuracyTab() {
+  const city = document.getElementById('acc-city-sel').value;
+  const lead = document.getElementById('acc-lead-sel').value;
+  const loadEl = document.getElementById('acc-loading');
+  const emptyEl = document.getElementById('acc-empty');
+  const tableEl = document.getElementById('acc-table');
+  const barCard = document.getElementById('acc-bar-card');
+  const leadCard = document.getElementById('acc-lead-card');
+
+  loadEl.classList.remove('d-none');
+  emptyEl.classList.add('d-none');
+  tableEl.classList.add('d-none');
+  barCard.classList.add('d-none');
+  leadCard.classList.add('d-none');
+
+  try {
+    const params = {};
+    if (city) params.city = city;
+    if (lead) params.lead_days = lead;
+    const rows = await api('GET', '/model-accuracy' + qs(params));
+    loadEl.classList.add('d-none');
+
+    if (!rows || rows.length === 0) {
+      emptyEl.classList.remove('d-none');
+      return;
+    }
+
+    // Aggregate by source
+    const bySource = {};
+    rows.forEach(r => {
+      if (!bySource[r.source]) bySource[r.source] = { maeSum: 0, rmseSum: 0, biasSum: 0, n: 0 };
+      const a = bySource[r.source];
+      a.maeSum += r.mae * r.n;
+      a.rmseSum += r.rmse * r.rmse * r.n;
+      a.biasSum += r.bias * r.n;
+      a.n += r.n;
+    });
+    const models = Object.entries(bySource).map(([src, a]) => ({
+      source: src,
+      mae: a.n > 0 ? a.maeSum / a.n : 0,
+      rmse: a.n > 0 ? Math.sqrt(a.rmseSum / a.n) : 0,
+      bias: a.n > 0 ? a.biasSum / a.n : 0,
+      n: a.n,
+    })).sort((a, b) => a.mae - b.mae);
+
+    const ul = accUnit();
+    const medals = ['\uD83E\uDD47', '\uD83E\uDD48', '\uD83E\uDD49'];
+    const subtitle = document.getElementById('acc-subtitle');
+    subtitle.textContent = `${models.length} models compared (${ul})`;
+
+    // Scoreboard table
+    const tbody = document.getElementById('acc-tbody');
+    tbody.innerHTML = models.map((m, i) => {
+      const medal = i < 3 ? medals[i] : '';
+      let cls = '';
+      if (models.length > 1) {
+        if (i === 0) cls = 'table-success';
+        if (i === models.length - 1) cls = 'table-danger';
+      }
+      const dm = accConv(m.mae), dr = accConv(m.rmse), db = accConv(m.bias);
+      const bc = db > 0 ? 'text-danger' : db < 0 ? 'text-primary' : '';
+      const bp = db > 0 ? '+' : '';
+      const badge = ACC_ENSEMBLE.has(m.source)
+        ? '<span class="badge bg-info-subtle text-info border border-info-subtle ms-1" style="font-size:.6rem">ensemble</span>'
+        : '<span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle ms-1" style="font-size:.6rem">det</span>';
+      return `<tr class="${cls}"><td class="ps-3">${medal} ${i+1}</td><td class="fw-medium">${m.source}${badge}</td>` +
+        `<td>${dm.toFixed(2)}</td><td>${dr.toFixed(2)}</td><td class="${bc}">${bp}${db.toFixed(2)}</td><td>${m.n.toLocaleString()}</td></tr>`;
+    }).join('');
+    tableEl.classList.remove('d-none');
+
+    // Bar chart
+    const sorted = [...models].sort((a, b) => b.mae - a.mae);
+    if (accBarChart) accBarChart.destroy();
+    accBarChart = new Chart(document.getElementById('acc-bar-chart'), {
+      type: 'bar',
+      data: {
+        labels: sorted.map(m => m.source),
+        datasets: [{
+          label: `MAE (${ul})`,
+          data: sorted.map(m => parseFloat(accConv(m.mae).toFixed(3))),
+          backgroundColor: sorted.map(m => (ACC_COLORS[m.source] || '#6c757d') + (ACC_ENSEMBLE.has(m.source) ? 'DD' : '88')),
+          borderRadius: 4,
+        }],
+      },
+      options: {
+        indexAxis: 'y', responsive: true,
+        plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => `MAE: ${ctx.parsed.x.toFixed(2)}${ul}` } } },
+        scales: { x: { beginAtZero: true, ticks: { callback: v => v + ul } } },
+      },
+    });
+    barCard.classList.remove('d-none');
+
+    // Lead days chart (only when lead_days not filtered)
+    if (!lead) {
+      const byLead = {};
+      rows.forEach(r => {
+        const key = `${r.source}|${r.lead_days}`;
+        if (!byLead[key]) byLead[key] = { source: r.source, lead: r.lead_days, maeSum: 0, n: 0 };
+        byLead[key].maeSum += r.mae * r.n;
+        byLead[key].n += r.n;
+      });
+      const bySrc = {};
+      Object.values(byLead).forEach(a => {
+        if (!bySrc[a.source]) bySrc[a.source] = [];
+        bySrc[a.source].push({ x: a.lead, y: parseFloat(accConv(a.n > 0 ? a.maeSum / a.n : 0).toFixed(3)) });
+      });
+      for (const s in bySrc) bySrc[s].sort((a, b) => a.x - b.x);
+
+      if (accLeadChart) accLeadChart.destroy();
+      accLeadChart = new Chart(document.getElementById('acc-lead-chart'), {
+        type: 'line',
+        data: {
+          datasets: Object.keys(bySrc).sort().map(src => ({
+            label: src,
+            data: bySrc[src],
+            borderColor: ACC_COLORS[src] || '#6c757d',
+            borderWidth: 2, pointRadius: 3, tension: 0.3, fill: false,
+          })),
+        },
+        options: {
+          responsive: true,
+          plugins: { legend: { position: 'top' }, tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(2)}${ul}` } } },
+          scales: {
+            x: { type: 'linear', title: { display: true, text: 'Lead Days' }, min: 1, ticks: { stepSize: 1 } },
+            y: { title: { display: true, text: `MAE (${ul})` }, beginAtZero: true, ticks: { callback: v => v + ul } },
+          },
+        },
+      });
+      leadCard.classList.remove('d-none');
+    }
+
+    accLoaded = true;
+  } catch (e) {
+    loadEl.classList.add('d-none');
+    showToast('Accuracy load failed: ' + e.message, 'danger');
+  }
+}
 </script>
 {{ end }}
