@@ -466,7 +466,10 @@ function mergeBQPrices(markets, bqSnaps) {
     const snap = thr !== null ? byThreshold[thr] : null;
     if (!snap) return mkt;
     if (!pmTimestamp || snap.timestamp > pmTimestamp) pmTimestamp = snap.timestamp;
-    return { ...mkt, outcomePrices: [String(snap.yes_cost), String(snap.no_cost)], tokens: null };
+    // Prefer yes_ask/no_ask (order book ask prices, sum > 1) over yes_cost/no_cost (mid, sum ≈ 1)
+    const yesPrice = snap.yes_ask != null ? snap.yes_ask : snap.yes_cost;
+    const noPrice  = snap.no_ask  != null ? snap.no_ask  : snap.no_cost;
+    return { ...mkt, outcomePrices: [String(yesPrice), String(noPrice)], tokens: null };
   });
   return { markets: merged, pmTimestamp };
 }
