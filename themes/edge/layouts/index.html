@@ -214,25 +214,76 @@
 
 <!-- P&L Simulator tab pane -->
 <div class="tab-pane fade" id="pane-pnl" role="tabpanel">
-  <!-- Controls -->
+  <!-- Strategy Configuration -->
   <div class="card shadow-sm border-0 mb-3">
-    <div class="card-body py-3">
+    <div class="card-header bg-transparent border-bottom-0 pt-3 pb-1">
+      <span class="fw-medium small"><i class="bi bi-gear-fill me-1"></i>Strategy Configuration</span>
+    </div>
+    <div class="card-body pt-2 pb-3">
       <div class="row g-2 align-items-end">
+        <!-- City -->
         <div class="col-sm-auto">
           <label class="form-label small fw-medium mb-1" for="pnl-city-sel">City</label>
-          <select class="form-select form-select-sm" id="pnl-city-sel" style="min-width:180px">
+          <select class="form-select form-select-sm" id="pnl-city-sel" style="min-width:160px">
             <option value="">All cities</option>
           </select>
         </div>
+        <!-- Strategy -->
         <div class="col-sm-auto">
-          <label class="form-label small fw-medium mb-1" for="pnl-edge-sel">Min Edge Threshold</label>
-          <select class="form-select form-select-sm" id="pnl-edge-sel" style="min-width:120px">
+          <label class="form-label small fw-medium mb-1" for="pnl-strategy-sel">Strategy</label>
+          <select class="form-select form-select-sm" id="pnl-strategy-sel" style="min-width:200px">
+            <option value="fade" selected>Fade Market (NO bets)</option>
+            <option value="follow">Follow Models (YES bets)</option>
+          </select>
+        </div>
+        <!-- Min PM Price -->
+        <div class="col-sm-auto">
+          <label class="form-label small fw-medium mb-1" for="pnl-min-pm">Min PM YES Price</label>
+          <select class="form-select form-select-sm" id="pnl-min-pm" style="min-width:100px">
+            <option value="0.05">$0.05</option>
+            <option value="0.10" selected>$0.10</option>
+            <option value="0.15">$0.15</option>
+            <option value="0.20">$0.20</option>
+            <option value="0.25">$0.25</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row g-2 align-items-end mt-1">
+        <!-- Deterministic filter -->
+        <div class="col-sm-auto d-flex align-items-end">
+          <div class="form-check mb-1">
+            <input class="form-check-input" type="checkbox" id="pnl-det-filter" checked>
+            <label class="form-check-label small" for="pnl-det-filter">
+              All deterministic models must <strong>not</strong> pick this bracket
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="row g-2 align-items-end mt-1">
+        <!-- Ensemble N -->
+        <div class="col-sm-auto">
+          <label class="form-label small fw-medium mb-1" for="pnl-ens-n">Ensemble models needed</label>
+          <select class="form-select form-select-sm" id="pnl-ens-n" style="min-width:80px">
+            <option value="1">1</option>
+            <option value="2" selected>2</option>
+            <option value="3">3</option>
+            <option value="4">4</option>
+            <option value="5">5</option>
+          </select>
+        </div>
+        <!-- Ensemble threshold -->
+        <div class="col-sm-auto">
+          <label class="form-label small fw-medium mb-1" for="pnl-ens-pct">with prob &lt;</label>
+          <select class="form-select form-select-sm" id="pnl-ens-pct" style="min-width:90px">
             <option value="0.05">5%</option>
             <option value="0.10" selected>10%</option>
             <option value="0.15">15%</option>
             <option value="0.20">20%</option>
           </select>
         </div>
+        <!-- Simulate -->
         <div class="col-sm-auto">
           <button class="btn btn-primary btn-sm" onclick="simulatePnl()">
             <i class="bi bi-play-fill me-1"></i>Simulate
@@ -251,14 +302,14 @@
   <!-- Empty state -->
   <div id="pnl-empty" class="text-center py-4 d-none">
     <i class="bi bi-inbox fs-3 text-muted"></i>
-    <p class="text-muted small mt-2 mb-0">No resolved trades found. Run the simulation to load data.</p>
+    <p class="text-muted small mt-2 mb-0">No trades matched your strategy filters. Try adjusting the parameters.</p>
   </div>
 
   <!-- Summary cards -->
   <div class="row g-3 mb-3 d-none" id="pnl-summary-row">
     <div class="col-6 col-lg-3">
       <div class="card shadow-sm border-0 text-center py-3">
-        <div class="text-muted small">Resolved Markets</div>
+        <div class="text-muted small">Total Trades</div>
         <div class="fs-4 fw-bold" id="pnl-total-count">0</div>
       </div>
     </div>
@@ -270,14 +321,14 @@
     </div>
     <div class="col-6 col-lg-3">
       <div class="card shadow-sm border-0 text-center py-3">
-        <div class="text-muted small">Avg YES Cost (Wins)</div>
-        <div class="fs-4 fw-bold text-success" id="pnl-avg-yes-win">--</div>
+        <div class="text-muted small">Total P&amp;L</div>
+        <div class="fs-4 fw-bold" id="pnl-total-pnl">--</div>
       </div>
     </div>
     <div class="col-6 col-lg-3">
       <div class="card shadow-sm border-0 text-center py-3">
-        <div class="text-muted small">Avg YES Cost (Losses)</div>
-        <div class="fs-4 fw-bold text-danger" id="pnl-avg-yes-loss">--</div>
+        <div class="text-muted small">ROI</div>
+        <div class="fs-4 fw-bold" id="pnl-roi">--</div>
       </div>
     </div>
   </div>
@@ -285,7 +336,7 @@
   <!-- Cumulative P&L chart -->
   <div class="card shadow-sm border-0 mb-3 d-none" id="pnl-chart-card">
     <div class="card-header bg-transparent border-bottom-0 pt-3 pb-0">
-      <span class="fw-medium small">Cumulative P&amp;L (underdog YES bets, $1 each)</span>
+      <span class="fw-medium small">Cumulative P&amp;L ($1 per trade)</span>
       <span class="text-muted small ms-2" id="pnl-chart-subtitle"></span>
     </div>
     <div class="card-body">
@@ -306,12 +357,13 @@
             <tr>
               <th class="ps-3" style="cursor:pointer" onclick="sortPnlTable('target_date')">Date <i class="bi bi-arrow-down-up text-muted"></i></th>
               <th>City</th>
-              <th>Bracket</th>
+              <th style="cursor:pointer" onclick="sortPnlTable('temp_threshold')">Bracket <i class="bi bi-arrow-down-up text-muted"></i></th>
               <th class="text-end">PM YES%</th>
-              <th class="text-end">PM NO%</th>
-              <th class="text-end">Actual Temp</th>
+              <th>Signal</th>
+              <th class="text-end">Ens Avg Prob</th>
+              <th class="text-center"># Det Disagree</th>
               <th class="text-center">Outcome</th>
-              <th class="text-end">P&amp;L</th>
+              <th class="text-end" style="cursor:pointer" onclick="sortPnlTable('pnl')">P&amp;L <i class="bi bi-arrow-down-up text-muted"></i></th>
             </tr>
           </thead>
           <tbody id="pnl-tbody"></tbody>
@@ -2009,12 +2061,14 @@ async function loadAccuracyTab() {
 // ── P&L Simulator ─────────────────────────────────────────────────────────
 let pnlLoaded = false;
 let pnlChart = null;
-let pnlTradesCache = [];
+let pnlEnrichedCache = [];
 let pnlSortCol = 'target_date';
 let pnlSortAsc = true;
 
+const DET_MODELS = ['tomorrow', 'pirate', 'nws', 'open_meteo', 'wunderground'];
+const ENS_MODELS = ['gfs', 'ecmwf', 'icon', 'gem', 'aifs'];
+
 function loadPnlTab() {
-  // Populate city dropdown once
   const sel = document.getElementById('pnl-city-sel');
   if (sel.options.length <= 1) {
     CITIES.forEach(c => {
@@ -2025,16 +2079,47 @@ function loadPnlTab() {
   }
 }
 
+/* Compute ensemble probability for a bracket [threshold-0.5, threshold+0.5)
+   using member_temps if available, otherwise normal approximation. */
+function ensembleBracketProb(modelData, threshold) {
+  if (!modelData) return null;
+  const lo = threshold - 0.5;
+  const hi = threshold + 0.5;
+  if (modelData.member_temps && modelData.member_temps.length > 0) {
+    const inBracket = modelData.member_temps.filter(t => t >= lo && t < hi).length;
+    return inBracket / modelData.member_temps.length;
+  }
+  if (modelData.predicted_temp != null && modelData.std_dev != null && modelData.std_dev > 0) {
+    const zHi = (hi - modelData.predicted_temp) / modelData.std_dev;
+    const zLo = (lo - modelData.predicted_temp) / modelData.std_dev;
+    return normalCDF(zHi) - normalCDF(zLo);
+  }
+  return null;
+}
+
+/* Check if a deterministic model "picks" a bracket:
+   predicted_temp falls in [threshold-0.5, threshold+0.5) */
+function detModelPicksBracket(modelData, threshold) {
+  if (!modelData || modelData.predicted_temp == null) return false;
+  const lo = threshold - 0.5;
+  const hi = threshold + 0.5;
+  return modelData.predicted_temp >= lo && modelData.predicted_temp < hi;
+}
+
 async function simulatePnl() {
   const citySlug = document.getElementById('pnl-city-sel').value;
-  const minEdge = parseFloat(document.getElementById('pnl-edge-sel').value);
+  const strategy = document.getElementById('pnl-strategy-sel').value;
+  const minPmPrice = parseFloat(document.getElementById('pnl-min-pm').value);
+  const detFilterOn = document.getElementById('pnl-det-filter').checked;
+  const ensN = parseInt(document.getElementById('pnl-ens-n').value);
+  const ensPct = parseFloat(document.getElementById('pnl-ens-pct').value);
+
   const loadEl = document.getElementById('pnl-loading');
   const emptyEl = document.getElementById('pnl-empty');
   const summaryRow = document.getElementById('pnl-summary-row');
   const chartCard = document.getElementById('pnl-chart-card');
   const tableCard = document.getElementById('pnl-table-card');
 
-  // Reset UI
   summaryRow.classList.add('d-none');
   chartCard.classList.add('d-none');
   tableCard.classList.add('d-none');
@@ -2044,85 +2129,152 @@ async function simulatePnl() {
   try {
     const params = {};
     if (citySlug) params.city = citySlug;
-    const trades = await api('GET', '/backtesting' + qs(params));
+    const rows = await api('GET', '/backtesting-v2' + qs(params));
     loadEl.classList.add('d-none');
 
-    if (!trades || trades.length === 0) {
+    if (!rows || rows.length === 0) {
       emptyEl.classList.remove('d-none');
       return;
     }
 
-    pnlTradesCache = trades;
-    renderPnl(trades, minEdge);
+    const trades = [];
+
+    rows.forEach(row => {
+      if (!row.brackets) return;
+      row.brackets.forEach(br => {
+        // Min PM price filter
+        if ((br.yes_cost || 0) < minPmPrice) return;
+
+        const models = row.models || {};
+        const threshold = br.temp_threshold;
+
+        // --- Deterministic filter ---
+        let detDisagreeCount = 0;
+        let anyDetPicks = false;
+        DET_MODELS.forEach(m => {
+          if (models[m]) {
+            if (detModelPicksBracket(models[m], threshold)) {
+              anyDetPicks = true;
+            } else {
+              detDisagreeCount++;
+            }
+          }
+        });
+        if (detFilterOn && anyDetPicks) return;
+
+        // --- Ensemble filter ---
+        let ensLowCount = 0;
+        let ensProbSum = 0;
+        let ensProbCount = 0;
+        ENS_MODELS.forEach(m => {
+          const prob = ensembleBracketProb(models[m], threshold);
+          if (prob !== null) {
+            ensProbSum += prob;
+            ensProbCount++;
+            if (prob < ensPct) ensLowCount++;
+          }
+        });
+        if (ensLowCount < ensN) return;
+
+        const ensAvgProb = ensProbCount > 0 ? ensProbSum / ensProbCount : null;
+        const wonBracket = !!br.won_bracket;
+
+        let pnl, won, signal;
+        if (strategy === 'fade') {
+          // Bet NO: pay no_cost, win if bracket LOSES
+          const cost = br.no_cost || 0;
+          won = !wonBracket;
+          pnl = won ? (1 - cost) : -cost;
+          signal = 'NO';
+        } else {
+          // Bet YES: pay yes_cost, win if bracket WINS
+          const cost = br.yes_cost || 0;
+          won = wonBracket;
+          pnl = won ? (1 - cost) : -cost;
+          signal = 'YES';
+        }
+
+        trades.push({
+          target_date: row.target_date,
+          city: row.city,
+          temp_threshold: threshold,
+          yes_cost: br.yes_cost || 0,
+          no_cost: br.no_cost || 0,
+          won_bracket: wonBracket,
+          signal,
+          ensAvgProb,
+          detDisagreeCount,
+          won,
+          pnl,
+          cost: strategy === 'fade' ? (br.no_cost || 0) : (br.yes_cost || 0),
+        });
+      });
+    });
+
+    if (trades.length === 0) {
+      emptyEl.classList.remove('d-none');
+      return;
+    }
+
+    // Sort by date then by threshold
+    trades.sort((a, b) => (a.target_date || '').localeCompare(b.target_date || '') || (a.temp_threshold - b.temp_threshold));
+
+    pnlEnrichedCache = trades;
+    renderPnl(trades, strategy);
   } catch (e) {
     loadEl.classList.add('d-none');
-    showToast('P&L load failed: ' + e.message, 'danger');
+    showToast('Backtest failed: ' + e.message, 'danger');
   }
 }
 
-function renderPnl(trades, minEdge) {
+function renderPnl(trades, strategy) {
   const summaryRow = document.getElementById('pnl-summary-row');
   const chartCard = document.getElementById('pnl-chart-card');
   const tableCard = document.getElementById('pnl-table-card');
 
-  // Compute P&L for each trade
-  // Strategy: bet $1 on YES when yes_cost < 0.5 (underdog YES)
-  const enriched = trades.map(t => {
-    const yesCost = t.yes_cost || 0;
-    const noCost = t.no_cost || 0;
-    const won = !!t.won_bracket;
-    const isUnderdog = yesCost < 0.5;
-    let pnl = 0;
-    if (isUnderdog) {
-      pnl = won ? +(1 - yesCost) : -yesCost;
-    }
-    return { ...t, pnl, isUnderdog, won };
-  });
-
-  // Sort by date
-  enriched.sort((a, b) => (a.target_date || '').localeCompare(b.target_date || ''));
-
-  // Summary stats
-  const total = enriched.length;
-  const wins = enriched.filter(t => t.won).length;
+  // Summary
+  const total = trades.length;
+  const wins = trades.filter(t => t.won).length;
   const winRate = total > 0 ? ((wins / total) * 100).toFixed(1) : '--';
-  const winTrades = enriched.filter(t => t.won);
-  const lossTrades = enriched.filter(t => !t.won);
-  const avgYesWin = winTrades.length > 0
-    ? (winTrades.reduce((s, t) => s + (t.yes_cost || 0), 0) / winTrades.length).toFixed(3)
-    : '--';
-  const avgYesLoss = lossTrades.length > 0
-    ? (lossTrades.reduce((s, t) => s + (t.yes_cost || 0), 0) / lossTrades.length).toFixed(3)
-    : '--';
+  const totalPnl = trades.reduce((s, t) => s + t.pnl, 0);
+  const totalCost = trades.reduce((s, t) => s + t.cost, 0);
+  const roi = totalCost > 0 ? ((totalPnl / totalCost) * 100).toFixed(1) : '--';
 
   document.getElementById('pnl-total-count').textContent = total;
   document.getElementById('pnl-win-rate').textContent = winRate === '--' ? '--' : winRate + '%';
-  document.getElementById('pnl-avg-yes-win').textContent = avgYesWin === '--' ? '--' : '$' + avgYesWin;
-  document.getElementById('pnl-avg-yes-loss').textContent = avgYesLoss === '--' ? '--' : '$' + avgYesLoss;
+
+  const pnlEl = document.getElementById('pnl-total-pnl');
+  pnlEl.textContent = '$' + totalPnl.toFixed(2);
+  pnlEl.className = 'fs-4 fw-bold ' + (totalPnl >= 0 ? 'text-success' : 'text-danger');
+
+  const roiEl = document.getElementById('pnl-roi');
+  roiEl.textContent = roi === '--' ? '--' : roi + '%';
+  roiEl.className = 'fs-4 fw-bold ' + (totalPnl >= 0 ? 'text-success' : 'text-danger');
+
   summaryRow.classList.remove('d-none');
 
-  // Cumulative P&L chart (only underdog bets)
-  const underdogTrades = enriched.filter(t => t.isUnderdog);
+  // Cumulative P&L chart
   let cumPnl = 0;
-  const chartData = underdogTrades.map((t, i) => {
+  const chartData = trades.map((t, i) => {
     cumPnl += t.pnl;
-    return { x: t.target_date, y: parseFloat(cumPnl.toFixed(2)) };
+    return { x: i + 1, y: parseFloat(cumPnl.toFixed(2)) };
   });
 
-  const chartSubtitle = document.getElementById('pnl-chart-subtitle');
-  chartSubtitle.textContent = `${underdogTrades.length} underdog bets (YES < $0.50)`;
+  const stratLabel = strategy === 'fade' ? 'Fade Market (NO bets)' : 'Follow Models (YES bets)';
+  document.getElementById('pnl-chart-subtitle').textContent = `${total} trades | ${stratLabel}`;
 
   if (pnlChart) pnlChart.destroy();
   pnlChart = new Chart(document.getElementById('pnl-chart'), {
     type: 'line',
     data: {
+      labels: chartData.map(d => d.x),
       datasets: [{
         label: 'Cumulative P&L ($)',
-        data: chartData,
+        data: chartData.map(d => d.y),
         borderColor: cumPnl >= 0 ? '#198754' : '#dc3545',
         backgroundColor: cumPnl >= 0 ? 'rgba(25,135,84,0.1)' : 'rgba(220,53,69,0.1)',
         borderWidth: 2,
-        pointRadius: 3,
+        pointRadius: trades.length > 100 ? 0 : 3,
         fill: true,
         tension: 0.3,
       }],
@@ -2133,13 +2285,13 @@ function renderPnl(trades, minEdge) {
         legend: { display: false },
         tooltip: {
           callbacks: {
-            title: ctx => ctx[0].raw.x,
-            label: ctx => `P&L: $${ctx.parsed.y.toFixed(2)}`,
+            title: ctx => 'Trade #' + chartData[ctx[0].dataIndex].x,
+            label: ctx => `Cumulative P&L: $${ctx.parsed.y.toFixed(2)}`,
           },
         },
       },
       scales: {
-        x: { type: 'category', title: { display: true, text: 'Date' }, ticks: { maxTicksLimit: 15, maxRotation: 45 } },
+        x: { title: { display: true, text: 'Trade #' }, ticks: { maxTicksLimit: 20 } },
         y: { title: { display: true, text: 'Cumulative P&L ($)' }, ticks: { callback: v => '$' + v.toFixed(2) } },
       },
     },
@@ -2147,37 +2299,31 @@ function renderPnl(trades, minEdge) {
   chartCard.classList.remove('d-none');
 
   // Trade log table
-  renderPnlTable(enriched);
-  const tableSubtitle = document.getElementById('pnl-table-subtitle');
-  tableSubtitle.textContent = `${total} trades`;
+  renderPnlTable(trades);
+  document.getElementById('pnl-table-subtitle').textContent = `${total} trades`;
   tableCard.classList.remove('d-none');
 }
 
 function renderPnlTable(trades) {
-  // Sort
   const sorted = [...trades].sort((a, b) => {
     let va = a[pnlSortCol], vb = b[pnlSortCol];
     if (typeof va === 'string') { va = va || ''; vb = vb || ''; return pnlSortAsc ? va.localeCompare(vb) : vb.localeCompare(va); }
+    if (va == null) va = 0; if (vb == null) vb = 0;
     return pnlSortAsc ? (va - vb) : (vb - va);
   });
 
   const tbody = document.getElementById('pnl-tbody');
   tbody.innerHTML = '';
   sorted.forEach(t => {
-    const yPct = ((t.yes_cost || 0) * 100).toFixed(0);
-    const nPct = ((t.no_cost || 0) * 100).toFixed(0);
+    const yPct = (t.yes_cost * 100).toFixed(0);
     const cityObj = CITIES.find(c => c.slug === t.city);
     const cityLabel = cityObj ? cityObj.label : t.city;
-    const actualF = t.actual_temp != null ? (t.actual_temp * 9/5 + 32).toFixed(1) + '°F' : '--';
-    const actualC = t.actual_temp != null ? t.actual_temp.toFixed(1) + '°C' : '';
-    const actualDisplay = t.actual_temp != null ? `${actualF} (${actualC})` : '--';
+    const ensAvgStr = t.ensAvgProb != null ? (t.ensAvgProb * 100).toFixed(1) + '%' : '--';
     const outcomeBadge = t.won
-      ? '<span class="badge bg-success">Won</span>'
-      : '<span class="badge bg-danger">Lost</span>';
-    const pnlStr = t.isUnderdog
-      ? (t.pnl >= 0 ? '+' : '') + '$' + t.pnl.toFixed(2)
-      : '<span class="text-muted">--</span>';
-    const rowClass = t.isUnderdog ? (t.won ? 'table-success' : 'table-danger') : '';
+      ? '<span class="badge bg-success">Win</span>'
+      : '<span class="badge bg-danger">Loss</span>';
+    const pnlStr = (t.pnl >= 0 ? '+' : '') + '$' + t.pnl.toFixed(2);
+    const rowClass = t.won ? 'table-success' : 'table-danger';
 
     const tr = document.createElement('tr');
     tr.className = rowClass;
@@ -2186,8 +2332,9 @@ function renderPnlTable(trades) {
       <td>${cityLabel}</td>
       <td>${t.temp_threshold != null ? t.temp_threshold + '°F' : '--'}</td>
       <td class="text-end">${yPct}%</td>
-      <td class="text-end">${nPct}%</td>
-      <td class="text-end">${actualDisplay}</td>
+      <td><span class="badge ${t.signal === 'NO' ? 'bg-warning text-dark' : 'bg-info text-dark'}">${t.signal}</span></td>
+      <td class="text-end">${ensAvgStr}</td>
+      <td class="text-center">${t.detDisagreeCount}</td>
       <td class="text-center">${outcomeBadge}</td>
       <td class="text-end fw-medium">${pnlStr}</td>
     `;
@@ -2202,18 +2349,8 @@ function sortPnlTable(col) {
     pnlSortCol = col;
     pnlSortAsc = true;
   }
-  if (pnlTradesCache.length > 0) {
-    const minEdge = parseFloat(document.getElementById('pnl-edge-sel').value);
-    // Re-enrich and re-render table only
-    const enriched = pnlTradesCache.map(t => {
-      const yesCost = t.yes_cost || 0;
-      const won = !!t.won_bracket;
-      const isUnderdog = yesCost < 0.5;
-      let pnl = 0;
-      if (isUnderdog) { pnl = won ? +(1 - yesCost) : -yesCost; }
-      return { ...t, pnl, isUnderdog, won };
-    });
-    renderPnlTable(enriched);
+  if (pnlEnrichedCache.length > 0) {
+    renderPnlTable(pnlEnrichedCache);
   }
 }
 </script>
