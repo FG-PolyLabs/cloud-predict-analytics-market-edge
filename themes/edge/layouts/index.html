@@ -2588,42 +2588,71 @@ function renderDebugLog(log) {
   const subtitle = document.getElementById('pnl-debug-subtitle');
   tbody.innerHTML = '';
 
+  // Sort by date, then threshold
+  log.sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.threshold - b.threshold));
+
   const included = log.filter(l => l.included).length;
   const excluded = log.length - included;
   subtitle.textContent = `${log.length} brackets evaluated: ${included} included, ${excluded} filtered out`;
 
   log.forEach(l => {
-    // Build ensemble details string
+    // Ensemble details with explanation
     const ensStr = Object.entries(l.ensModels || {}).map(([m, d]) => {
       const icon = d.hasEdge ? '&check;' : '&times;';
       const cls = d.hasEdge ? 'text-success' : 'text-danger';
-      return `<span class="${cls}">${icon}</span> ${m.toUpperCase()}: ${d.probPct}% (edge: ${d.edge}pp)`;
+      if (d.probPct === 'N/A') return `<span class="text-muted">${m.toUpperCase()}: no data</span>`;
+      return `<span class="${cls}">${icon} ${m.toUpperCase()}: model says ${d.probPct}%, PM says ${l.pmYes}, edge=${d.edge}pp ${d.hasEdge ? '(enough)' : '(not enough)'}</span>`;
     }).join('<br>');
 
-    const noPriceBadge = l.noPrice === 'PASS'
-      ? '<span class="badge bg-success-subtle text-success border border-success-subtle">PASS</span>'
-      : `<span class="badge bg-danger-subtle text-danger border border-danger-subtle">${l.noPrice}</span>`;
-    const detBadge = l.detFilter === 'PASS' || l.detFilter === 'OFF'
-      ? `<span class="badge bg-success-subtle text-success border border-success-subtle">${l.detFilter}</span>`
-      : `<span class="badge bg-danger-subtle text-danger border border-danger-subtle">${l.detFilter}</span>`;
-    const ensBadge = l.ensFilter.startsWith('PASS')
-      ? `<span class="badge bg-success-subtle text-success border border-success-subtle">PASS (${l.ensWithEdge}/${l.majority})</span>`
-      : `<span class="badge bg-danger-subtle text-danger border border-danger-subtle">${l.ensFilter}</span>`;
+    // NO Price filter — descriptive
+    let noPriceDesc;
+    if (l.noPrice === 'PASS') {
+      noPriceDesc = `<span class="badge bg-success-subtle text-success border border-success-subtle">PASS</span>
+        <div class="text-muted mt-1">NO costs ${l.noCost}, within max limit</div>`;
+    } else {
+      noPriceDesc = `<span class="badge bg-danger-subtle text-danger border border-danger-subtle">FAIL</span>
+        <div class="text-danger mt-1">NO costs ${l.noCost} — exceeds max price. Too expensive to enter.</div>`;
+    }
+
+    // Deterministic filter — descriptive
+    let detDesc;
+    if (l.detFilter === 'OFF') {
+      detDesc = `<span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle">OFF</span>
+        <div class="text-muted mt-1">Filter disabled</div>`;
+    } else if (l.detFilter === 'PASS') {
+      detDesc = `<span class="badge bg-success-subtle text-success border border-success-subtle">PASS</span>
+        <div class="text-muted mt-1">No deterministic model predicts the high falls in this bracket</div>`;
+    } else {
+      detDesc = `<span class="badge bg-danger-subtle text-danger border border-danger-subtle">FAIL</span>
+        <div class="text-danger mt-1">${l.detFilter.replace('FAIL ', '')} — at least one det model thinks this bracket could win</div>`;
+    }
+
+    // Ensemble filter — descriptive
+    let ensDesc;
+    if (l.ensFilter.startsWith('PASS')) {
+      ensDesc = `<span class="badge bg-success-subtle text-success border border-success-subtle">PASS</span>
+        <div class="text-muted mt-1">${l.ensWithEdge} of ${l.ensProbCount} ensemble models show sufficient edge (need majority: ${l.majority}+)</div>`;
+    } else {
+      ensDesc = `<span class="badge bg-danger-subtle text-danger border border-danger-subtle">FAIL</span>
+        <div class="text-danger mt-1">Only ${l.ensWithEdge} of ${l.ensProbCount} models show enough edge (need ${l.majority}+ for majority). Models don't agree strongly enough.</div>`;
+    }
+
     const resultBadge = l.included
       ? '<span class="badge bg-success">INCLUDED</span>'
       : '<span class="badge bg-secondary">FILTERED OUT</span>';
 
     const tr = document.createElement('tr');
-    tr.className = l.included ? '' : 'text-muted';
+    tr.className = l.included ? '' : '';
+    tr.style.opacity = l.included ? '1' : '0.6';
     tr.innerHTML = `
       <td class="ps-2">${l.date}</td>
       <td>${l.threshold}</td>
       <td class="text-end">${l.pmYes}</td>
       <td class="text-end">${l.noCost}</td>
-      <td>${noPriceBadge}</td>
-      <td>${detBadge}</td>
-      <td>${ensStr}</td>
-      <td>${ensBadge}</td>
+      <td>${noPriceDesc}</td>
+      <td>${detDesc}</td>
+      <td style="font-size:.7rem">${ensStr}</td>
+      <td>${ensDesc}</td>
       <td class="text-center">${resultBadge}</td>
     `;
     tbody.appendChild(tr);
