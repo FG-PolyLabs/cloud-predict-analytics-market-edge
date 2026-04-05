@@ -457,9 +457,12 @@
               <th class="ps-3">Source</th>
               <th>City</th>
               <th>Date Range</th>
-              <th class="text-end">Rows</th>
-              <th class="text-end">Actuals</th>
-              <th style="min-width:140px">Coverage</th>
+              <th class="text-end" data-bs-toggle="tooltip" style="cursor:help"
+                  title="Total records in BigQuery. Forecasts: one row per target date per model run. Polymarket: one row per price snapshot per bracket.">Records</th>
+              <th class="text-end" data-bs-toggle="tooltip" style="cursor:help"
+                  title="Forecast records verified against actual observed temperature. Used for accuracy tracking. N/A for Polymarket (price data, not forecasts).">Verified</th>
+              <th style="min-width:140px" data-bs-toggle="tooltip" style="cursor:help"
+                  title="% of forecast records with actual temps filled in. Higher = more accuracy data. N/A for Polymarket.">Accuracy Data</th>
             </tr>
           </thead>
           <tbody id="cov-tbody"></tbody>
@@ -2533,6 +2536,10 @@ function loadCoverageTab() {
     });
     sel.appendChild(pmGroup);
     sel.appendChild(forecastGroup);
+    // Init tooltips
+    document.querySelectorAll('#pane-coverage [data-bs-toggle="tooltip"]').forEach(el => {
+      new bootstrap.Tooltip(el, { trigger: 'hover' });
+    });
     fetchCoverage();
   }
 }
@@ -2620,34 +2627,36 @@ function renderCoverageTable(rows, isAggregated) {
   rows.forEach(r => {
     const rowCount = r.row_count || 0;
     const actuals = r.has_actuals || 0;
-    const pct = rowCount > 0 ? ((actuals / rowCount) * 100) : 0;
+    const isPM = r.source === 'polymarket';
+    const pct = (!isPM && rowCount > 0) ? ((actuals / rowCount) * 100) : 0;
     const dateRange = r.min_date && r.max_date ? `${r.min_date} &mdash; ${r.max_date}` : '--';
 
-    // Color coding: green if actuals > 0, yellow if rows but no actuals, gray if no data
-    let rowClass = '';
-    if (rowCount === 0) {
-      rowClass = 'text-muted';
-    }
-    const barColor = actuals > 0 ? 'bg-success' : (rowCount > 0 ? 'bg-warning' : 'bg-secondary');
-
+    let rowClass = rowCount === 0 ? 'text-muted' : '';
+    const badgeClass = isPM ? 'bg-primary' : actuals > 0 ? 'bg-success' : rowCount > 0 ? 'bg-warning text-dark' : 'bg-secondary';
+    const barColor = actuals > 0 ? 'bg-success' : rowCount > 0 ? 'bg-warning' : 'bg-secondary';
     const cityLabel = isAggregated ? r.city : (CITIES.find(c => c.slug === r.city)?.label || r.city);
+
+    // Source label with type hint
+    const sourceType = isPM ? 'prices' : ['gfs','ecmwf','icon','gem','aifs'].includes(r.source) ? 'ensemble' : 'det';
+    const sourceLabel = `${(r.source || '').toUpperCase()} <span class="text-muted" style="font-size:.65em">${sourceType}</span>`;
 
     const tr = document.createElement('tr');
     tr.className = rowClass;
     tr.innerHTML = `
-      <td class="ps-3"><span class="badge ${actuals > 0 ? 'bg-success' : rowCount > 0 ? 'bg-warning text-dark' : 'bg-secondary'}">${(r.source || '').toUpperCase()}</span></td>
+      <td class="ps-3"><span class="badge ${badgeClass}">${sourceLabel}</span></td>
       <td>${cityLabel}</td>
       <td>${dateRange}</td>
-      <td class="text-end">${rowCount.toLocaleString()}</td>
-      <td class="text-end">${actuals.toLocaleString()}</td>
-      <td>
-        <div class="d-flex align-items-center gap-2">
-          <div class="progress flex-grow-1" style="height:8px">
-            <div class="progress-bar ${barColor}" role="progressbar" style="width:${pct.toFixed(1)}%"></div>
-          </div>
-          <span class="small text-muted" style="min-width:42px">${pct.toFixed(1)}%</span>
-        </div>
-      </td>
+      <td class="text-end">${isPM ? rowCount.toLocaleString() + ' snapshots' : rowCount.toLocaleString() + ' forecasts'}</td>
+      <td class="text-end">${isPM ? '<span class="text-muted small">N/A</span>' : actuals.toLocaleString()}</td>
+      <td>${isPM
+        ? '<span class="text-muted small">N/A (price data)</span>'
+        : `<div class="d-flex align-items-center gap-2">
+            <div class="progress flex-grow-1" style="height:8px">
+              <div class="progress-bar ${barColor}" role="progressbar" style="width:${pct.toFixed(1)}%"></div>
+            </div>
+            <span class="small text-muted" style="min-width:42px">${pct.toFixed(1)}%</span>
+          </div>`
+      }</td>
     `;
     tbody.appendChild(tr);
   });
