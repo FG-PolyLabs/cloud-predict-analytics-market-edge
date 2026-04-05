@@ -262,25 +262,18 @@
       </div>
 
       <div class="row g-2 align-items-end mt-1">
-        <!-- Ensemble N -->
+        <!-- Ensemble edge requirement -->
         <div class="col-sm-auto">
-          <label class="form-label small fw-medium mb-1" for="pnl-ens-n">Ensemble models needed</label>
-          <select class="form-select form-select-sm" id="pnl-ens-n" style="min-width:80px">
-            <option value="1">1</option>
-            <option value="2" selected>2</option>
-            <option value="3">3</option>
-            <option value="4">4</option>
-            <option value="5">5</option>
-          </select>
-        </div>
-        <!-- Ensemble threshold -->
-        <div class="col-sm-auto">
-          <label class="form-label small fw-medium mb-1" for="pnl-ens-pct">with prob &lt;</label>
-          <select class="form-select form-select-sm" id="pnl-ens-pct" style="min-width:90px">
-            <option value="0.05">5%</option>
-            <option value="0.10" selected>10%</option>
-            <option value="0.15">15%</option>
-            <option value="0.20">20%</option>
+          <label class="form-label small fw-medium mb-1" for="pnl-ens-edge"
+                 data-bs-toggle="tooltip" title="Majority of ensemble models must show probability at least this many percentage points below the PM price. E.g. if PM = 15% and edge = 5pp, models must show ≤10%.">
+            Min ensemble edge (pp)
+          </label>
+          <select class="form-select form-select-sm" id="pnl-ens-edge" style="min-width:90px">
+            <option value="3">3pp</option>
+            <option value="5" selected>5pp</option>
+            <option value="8">8pp</option>
+            <option value="10">10pp</option>
+            <option value="15">15pp</option>
           </select>
         </div>
         <!-- Simulate -->
@@ -360,8 +353,8 @@
               <th style="cursor:pointer" onclick="sortPnlTable('temp_threshold')">Bracket <i class="bi bi-arrow-down-up text-muted"></i></th>
               <th class="text-end">PM YES%</th>
               <th>Signal</th>
-              <th class="text-end">Ens Avg Prob</th>
-              <th class="text-center"># Det Disagree</th>
+              <th class="text-end" data-bs-toggle="tooltip" title="Average probability across ensemble models for this bracket">Ens Avg%</th>
+              <th class="text-end" data-bs-toggle="tooltip" title="PM price minus ensemble average — the edge in percentage points">Edge (pp)</th>
               <th class="text-center">Outcome</th>
               <th class="text-end" style="cursor:pointer" onclick="sortPnlTable('pnl')">P&amp;L <i class="bi bi-arrow-down-up text-muted"></i></th>
             </tr>
@@ -2111,8 +2104,7 @@ async function simulatePnl() {
   const strategy = document.getElementById('pnl-strategy-sel').value;
   const minPmPrice = parseFloat(document.getElementById('pnl-min-pm').value);
   const detFilterOn = document.getElementById('pnl-det-filter').checked;
-  const ensN = parseInt(document.getElementById('pnl-ens-n').value);
-  const ensPct = parseFloat(document.getElementById('pnl-ens-pct').value);
+  const ensEdgePP = parseFloat(document.getElementById('pnl-ens-edge').value);
 
   const loadEl = document.getElementById('pnl-loading');
   const emptyEl = document.getElementById('pnl-empty');
@@ -2162,8 +2154,11 @@ async function simulatePnl() {
         });
         if (detFilterOn && anyDetPicks) return;
 
-        // --- Ensemble filter ---
-        let ensLowCount = 0;
+        // --- Ensemble edge filter ---
+        // Majority of ensemble models must show probability at least ensEdgePP
+        // percentage points below the PM price (i.e. model thinks it's overpriced)
+        const pmPct = (br.yes_cost || 0) * 100; // PM implied probability in %
+        let ensWithEdge = 0;
         let ensProbSum = 0;
         let ensProbCount = 0;
         ENS_MODELS.forEach(m => {
@@ -2171,10 +2166,13 @@ async function simulatePnl() {
           if (prob !== null) {
             ensProbSum += prob;
             ensProbCount++;
-            if (prob < ensPct) ensLowCount++;
+            // Model shows edge if its probability is at least ensEdgePP below PM price
+            if ((pmPct - prob) >= ensEdgePP) ensWithEdge++;
           }
         });
-        if (ensLowCount < ensN) return;
+        // Majority = more than half of available ensemble models
+        const majority = ensProbCount > 0 ? Math.ceil(ensProbCount / 2) : 1;
+        if (ensWithEdge < majority) return;
 
         const ensAvgProb = ensProbCount > 0 ? ensProbSum / ensProbCount : null;
         const wonBracket = !!br.won_bracket;
@@ -2203,7 +2201,7 @@ async function simulatePnl() {
           won_bracket: wonBracket,
           signal,
           ensAvgProb,
-          detDisagreeCount,
+          edgePP: ensAvgProb !== null ? pmPct - (ensAvgProb * 100) : null,
           won,
           pnl,
           cost: strategy === 'fade' ? (br.no_cost || 0) : (br.yes_cost || 0),
@@ -2334,7 +2332,7 @@ function renderPnlTable(trades) {
       <td class="text-end">${yPct}%</td>
       <td><span class="badge ${t.signal === 'NO' ? 'bg-warning text-dark' : 'bg-info text-dark'}">${t.signal}</span></td>
       <td class="text-end">${ensAvgStr}</td>
-      <td class="text-center">${t.detDisagreeCount}</td>
+      <td class="text-end ${t.edgePP != null && t.edgePP >= 5 ? 'text-success fw-medium' : ''}">${t.edgePP != null ? t.edgePP.toFixed(1) + 'pp' : '--'}</td>
       <td class="text-center">${outcomeBadge}</td>
       <td class="text-end fw-medium">${pnlStr}</td>
     `;
