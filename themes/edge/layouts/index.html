@@ -309,8 +309,14 @@
         </div>
       </div>
 
-      <!-- Strategy description -->
-      <div class="mt-2 p-2 bg-light rounded small text-muted" id="strategy-desc"></div>
+      <!-- Debug toggle + Strategy description -->
+      <div class="mt-2 d-flex align-items-start gap-3">
+        <div class="p-2 bg-light rounded small text-muted flex-grow-1" id="strategy-desc"></div>
+        <div class="form-check form-switch mt-1" style="min-width:100px">
+          <input class="form-check-input" type="checkbox" id="pnl-debug-toggle">
+          <label class="form-check-label small" for="pnl-debug-toggle">Debug</label>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -388,6 +394,34 @@
             </tr>
           </thead>
           <tbody id="pnl-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Debug log (shown when debug toggle is on) -->
+  <div class="card shadow-sm border-0 d-none mt-3" id="pnl-debug-card">
+    <div class="card-header bg-transparent border-bottom-0 pt-3 pb-0 d-flex align-items-center gap-2">
+      <span class="fw-medium small"><i class="bi bi-bug me-1"></i>Filter Debug Log</span>
+      <span class="text-muted small" id="pnl-debug-subtitle"></span>
+    </div>
+    <div class="card-body p-0">
+      <div class="table-responsive" style="max-height:500px;overflow-y:auto">
+        <table class="table table-sm table-hover align-middle mb-0" style="font-size:.75rem">
+          <thead class="table-light sticky-top">
+            <tr>
+              <th class="ps-2">Date</th>
+              <th>Bracket</th>
+              <th class="text-end">PM YES%</th>
+              <th class="text-end">NO Price</th>
+              <th>NO Price Filter</th>
+              <th>Det Filter</th>
+              <th>Ensemble Details</th>
+              <th>Ens Filter</th>
+              <th class="text-center">Result</th>
+            </tr>
+          </thead>
+          <tbody id="pnl-debug-tbody"></tbody>
         </table>
       </div>
     </div>
@@ -2252,6 +2286,8 @@ async function simulatePnl() {
     }
 
     const trades = [];
+    const debugLog = [];
+    const debugMode = document.getElementById('pnl-debug-toggle')?.checked || false;
 
     rows.forEach(row => {
       if (!row.brackets) return;
@@ -2286,20 +2322,41 @@ async function simulatePnl() {
         let ensWithEdge = 0;
         let ensProbSum = 0;
         let ensProbCount = 0;
+        const ensDetails = {};
         ENS_MODELS.forEach(m => {
           const prob = ensembleBracketProb(models[m], threshold);
           if (prob !== null) {
-            ensProbSum += prob;
+            const probPct = prob * 100; // convert fraction to %
+            ensProbSum += probPct;
             ensProbCount++;
-            // Model shows edge if its probability is at least ensEdgePP below PM price
-            if ((pmPct - prob) >= ensEdgePP) ensWithEdge++;
+            const edge = pmPct - probPct;
+            ensDetails[m] = { probPct: probPct.toFixed(1), edge: edge.toFixed(1), hasEdge: edge >= ensEdgePP };
+            if (edge >= ensEdgePP) ensWithEdge++;
+          } else {
+            ensDetails[m] = { probPct: 'N/A', edge: 'N/A', hasEdge: false };
           }
         });
         // Majority = more than half of available ensemble models
         const majority = ensProbCount > 0 ? Math.ceil(ensProbCount / 2) : 1;
+
+        // Debug logging
+        if (debugMode) {
+          const detPickList = DET_MODELS.filter(m => models[m] && detModelPicksBracket(models[m], threshold));
+          debugLog.push({
+            date: row.target_date, city: row.city, threshold,
+            pmYes: pmPct.toFixed(1) + '%', noCost: (noCost*100).toFixed(0) + 'c',
+            detFilter: detFilterOn ? (anyDetPicks ? 'FAIL (picked by: ' + detPickList.join(', ') + ')' : 'PASS') : 'OFF',
+            noPrice: noCost > maxNoPrice ? 'FAIL (>' + (maxNoPrice*100) + 'c)' : 'PASS',
+            ensModels: ensDetails,
+            ensWithEdge, majority, ensProbCount,
+            ensFilter: ensWithEdge >= majority ? 'PASS' : 'FAIL (' + ensWithEdge + '/' + majority + ' needed)',
+            included: !anyDetPicks && ensWithEdge >= majority && !(strategy === 'fade' && noCost > maxNoPrice),
+          });
+        }
+
         if (ensWithEdge < majority) return;
 
-        const ensAvgProb = ensProbCount > 0 ? ensProbSum / ensProbCount : null;
+        const ensAvgProb = ensProbCount > 0 ? (ensProbSum / ensProbCount) / 100 : null; // back to 0-1 for display
         const wonBracket = !!br.won_bracket;
 
         let pnl, won, signal, exitPrice = null, exitType = 'expiry';
@@ -2373,7 +2430,7 @@ async function simulatePnl() {
       });
     });
 
-    if (trades.length === 0) {
+    if (trades.length === 0 && !debugMode) {
       emptyEl.classList.remove('d-none');
       return;
     }
@@ -2382,7 +2439,16 @@ async function simulatePnl() {
     trades.sort((a, b) => (a.target_date || '').localeCompare(b.target_date || '') || (a.temp_threshold - b.temp_threshold));
 
     pnlEnrichedCache = trades;
-    renderPnl(trades, strategy);
+    if (trades.length > 0) {
+      renderPnl(trades, strategy);
+    } else {
+      emptyEl.classList.remove('d-none');
+    }
+
+    // Render debug log if enabled
+    if (debugMode && debugLog.length > 0) {
+      renderDebugLog(debugLog);
+    }
   } catch (e) {
     loadEl.classList.add('d-none');
     showToast('Backtest failed: ' + e.message, 'danger');
@@ -2514,6 +2580,56 @@ function sortPnlTable(col) {
   if (pnlEnrichedCache.length > 0) {
     renderPnlTable(pnlEnrichedCache);
   }
+}
+
+function renderDebugLog(log) {
+  const card = document.getElementById('pnl-debug-card');
+  const tbody = document.getElementById('pnl-debug-tbody');
+  const subtitle = document.getElementById('pnl-debug-subtitle');
+  tbody.innerHTML = '';
+
+  const included = log.filter(l => l.included).length;
+  const excluded = log.length - included;
+  subtitle.textContent = `${log.length} brackets evaluated: ${included} included, ${excluded} filtered out`;
+
+  log.forEach(l => {
+    // Build ensemble details string
+    const ensStr = Object.entries(l.ensModels || {}).map(([m, d]) => {
+      const icon = d.hasEdge ? '&check;' : '&times;';
+      const cls = d.hasEdge ? 'text-success' : 'text-danger';
+      return `<span class="${cls}">${icon}</span> ${m.toUpperCase()}: ${d.probPct}% (edge: ${d.edge}pp)`;
+    }).join('<br>');
+
+    const noPriceBadge = l.noPrice === 'PASS'
+      ? '<span class="badge bg-success-subtle text-success border border-success-subtle">PASS</span>'
+      : `<span class="badge bg-danger-subtle text-danger border border-danger-subtle">${l.noPrice}</span>`;
+    const detBadge = l.detFilter === 'PASS' || l.detFilter === 'OFF'
+      ? `<span class="badge bg-success-subtle text-success border border-success-subtle">${l.detFilter}</span>`
+      : `<span class="badge bg-danger-subtle text-danger border border-danger-subtle">${l.detFilter}</span>`;
+    const ensBadge = l.ensFilter.startsWith('PASS')
+      ? `<span class="badge bg-success-subtle text-success border border-success-subtle">PASS (${l.ensWithEdge}/${l.majority})</span>`
+      : `<span class="badge bg-danger-subtle text-danger border border-danger-subtle">${l.ensFilter}</span>`;
+    const resultBadge = l.included
+      ? '<span class="badge bg-success">INCLUDED</span>'
+      : '<span class="badge bg-secondary">FILTERED OUT</span>';
+
+    const tr = document.createElement('tr');
+    tr.className = l.included ? '' : 'text-muted';
+    tr.innerHTML = `
+      <td class="ps-2">${l.date}</td>
+      <td>${l.threshold}</td>
+      <td class="text-end">${l.pmYes}</td>
+      <td class="text-end">${l.noCost}</td>
+      <td>${noPriceBadge}</td>
+      <td>${detBadge}</td>
+      <td>${ensStr}</td>
+      <td>${ensBadge}</td>
+      <td class="text-center">${resultBadge}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  card.classList.remove('d-none');
 }
 
 // ── Data Coverage ─────────────────────────────────────────────────────────
