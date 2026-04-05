@@ -232,11 +232,11 @@
         <div class="col-sm-auto">
           <label class="form-label small fw-medium mb-1" for="pnl-strategy-sel">Strategy</label>
           <select class="form-select form-select-sm" id="pnl-strategy-sel" style="min-width:200px"
-                  onchange="document.getElementById('exit-options').classList.toggle('d-none', this.value.indexOf('exit') === -1)">
-            <option value="fade" selected>Fade Market — hold to expiry</option>
-            <option value="fade-exit-fixed">Fade Market — sell at fixed price</option>
-            <option value="fade-exit-pct">Fade Market — sell at % profit</option>
-            <option value="follow">Follow Models — hold to expiry</option>
+                  onchange="updateStrategyDesc(); document.getElementById('exit-options').classList.toggle('d-none', this.value.indexOf('exit') === -1)">
+            <option value="fade" selected>Buy NO — hold to expiry</option>
+            <option value="fade-exit-fixed">Buy NO — sell at fixed price</option>
+            <option value="fade-exit-pct">Buy NO — sell at % profit</option>
+            <option value="follow">Buy YES — hold to expiry</option>
           </select>
         </div>
         <!-- Exit options (shown only for exit strategies) -->
@@ -252,15 +252,18 @@
             <option value="0.99">$0.99 / 100%</option>
           </select>
         </div>
-        <!-- Min PM Price -->
+        <!-- Max NO Price (won't buy NO for more than this) -->
         <div class="col-sm-auto">
-          <label class="form-label small fw-medium mb-1" for="pnl-min-pm">Min PM YES Price</label>
-          <select class="form-select form-select-sm" id="pnl-min-pm" style="min-width:100px">
-            <option value="0.05">$0.05</option>
-            <option value="0.10" selected>$0.10</option>
-            <option value="0.15">$0.15</option>
-            <option value="0.20">$0.20</option>
-            <option value="0.25">$0.25</option>
+          <label class="form-label small fw-medium mb-1" for="pnl-max-no"
+                 data-bs-toggle="tooltip" title="Won't buy a NO contract for more than this price. Lower = cheaper entry but fewer trades.">
+            Max NO price
+          </label>
+          <select class="form-select form-select-sm" id="pnl-max-no" style="min-width:100px">
+            <option value="0.80">80&cent;</option>
+            <option value="0.85">85&cent;</option>
+            <option value="0.90" selected>90&cent;</option>
+            <option value="0.95">95&cent;</option>
+            <option value="0.99">99&cent;</option>
           </select>
         </div>
       </div>
@@ -299,6 +302,9 @@
           </button>
         </div>
       </div>
+
+      <!-- Strategy description -->
+      <div class="mt-2 p-2 bg-light rounded small text-muted" id="strategy-desc"></div>
     </div>
   </div>
 
@@ -2077,6 +2083,18 @@ let pnlSortAsc = true;
 const DET_MODELS = ['tomorrow', 'pirate', 'nws', 'open_meteo', 'wunderground'];
 const ENS_MODELS = ['gfs', 'ecmwf', 'icon', 'gem', 'aifs'];
 
+function updateStrategyDesc() {
+  const v = document.getElementById('pnl-strategy-sel').value;
+  const desc = document.getElementById('strategy-desc');
+  const descs = {
+    'fade': '<strong>Buy NO — hold to expiry:</strong> Buy a NO contract at market price when the forecasting models indicate the actual probability of NO is significantly higher than what the market is pricing. For example, if NO costs 80\u00A2 but ensemble models suggest the true NO probability is ~90%, there\'s a 10pp edge. Hold the position until the market resolves. If the bracket loses (NO wins), you receive $1 back. Profit = $1 - entry cost.',
+    'fade-exit-fixed': '<strong>Buy NO — sell at fixed price:</strong> Same entry logic as above, but instead of holding to expiry, sell the NO position when it reaches a target price (e.g. buy at 80\u00A2, sell at 95\u00A2). Locks in profit without waiting for resolution. If the target is never reached, falls back to holding to expiry.',
+    'fade-exit-pct': '<strong>Buy NO — sell at % profit:</strong> Same entry logic, but exit when the position has gained a target percentage (e.g. 25% gain on an 80\u00A2 entry = sell at $1.00 or higher). If never reached, holds to expiry.',
+    'follow': '<strong>Buy YES — hold to expiry:</strong> Buy a YES contract when ensemble models indicate the bracket\'s true probability is significantly higher than what the market is pricing. Hold to expiry. If the bracket wins, receive $1 back.',
+  };
+  desc.innerHTML = descs[v] || '';
+}
+
 function loadPnlTab() {
   const sel = document.getElementById('pnl-city-sel');
   if (sel.options.length <= 1) {
@@ -2086,6 +2104,7 @@ function loadPnlTab() {
       sel.appendChild(o);
     });
   }
+  updateStrategyDesc();
 }
 
 /* Compute ensemble probability for a bracket [threshold-0.5, threshold+0.5)
@@ -2121,7 +2140,7 @@ async function simulatePnl() {
   const strategy = strategyRaw.startsWith('fade') ? 'fade' : 'follow';
   const exitMode = strategyRaw.includes('exit-fixed') ? 'fixed' : strategyRaw.includes('exit-pct') ? 'pct' : 'hold';
   const exitVal = parseFloat(document.getElementById('pnl-exit-val').value);
-  const minPmPrice = parseFloat(document.getElementById('pnl-min-pm').value);
+  const maxNoPrice = parseFloat(document.getElementById('pnl-max-no').value);
   const detFilterOn = document.getElementById('pnl-det-filter').checked;
   const ensEdgePP = parseFloat(document.getElementById('pnl-ens-edge').value);
 
@@ -2153,8 +2172,11 @@ async function simulatePnl() {
     rows.forEach(row => {
       if (!row.brackets) return;
       row.brackets.forEach(br => {
-        // Min PM price filter
-        if ((br.yes_cost || 0) < minPmPrice) return;
+        // Max NO price filter — skip brackets where NO is too expensive
+        const noCost = br.no_cost || 0;
+        if (strategy === 'fade' && noCost > maxNoPrice) return;
+        // For follow strategy, skip brackets where YES is too cheap (unlikely)
+        if (strategy === 'follow' && (br.yes_cost || 0) < 0.05) return;
 
         const models = row.models || {};
         const threshold = br.temp_threshold;
