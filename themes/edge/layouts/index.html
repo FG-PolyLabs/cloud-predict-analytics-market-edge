@@ -231,9 +231,25 @@
         <!-- Strategy -->
         <div class="col-sm-auto">
           <label class="form-label small fw-medium mb-1" for="pnl-strategy-sel">Strategy</label>
-          <select class="form-select form-select-sm" id="pnl-strategy-sel" style="min-width:200px">
-            <option value="fade" selected>Fade Market (NO bets)</option>
-            <option value="follow">Follow Models (YES bets)</option>
+          <select class="form-select form-select-sm" id="pnl-strategy-sel" style="min-width:200px"
+                  onchange="document.getElementById('exit-options').classList.toggle('d-none', this.value.indexOf('exit') === -1)">
+            <option value="fade" selected>Fade Market — hold to expiry</option>
+            <option value="fade-exit-fixed">Fade Market — sell at fixed price</option>
+            <option value="fade-exit-pct">Fade Market — sell at % profit</option>
+            <option value="follow">Follow Models — hold to expiry</option>
+          </select>
+        </div>
+        <!-- Exit options (shown only for exit strategies) -->
+        <div class="col-sm-auto d-none" id="exit-options">
+          <label class="form-label small fw-medium mb-1" for="pnl-exit-val"
+                 data-bs-toggle="tooltip" title="For fixed: sell NO at this price (e.g. 0.95). For %: take profit at this % gain (e.g. 25% on $0.90 entry = sell at $0.925+).">
+            Exit target
+          </label>
+          <select class="form-select form-select-sm" id="pnl-exit-val" style="min-width:100px">
+            <option value="0.93">$0.93 / 10%</option>
+            <option value="0.95" selected>$0.95 / 25%</option>
+            <option value="0.97">$0.97 / 50%</option>
+            <option value="0.99">$0.99 / 100%</option>
           </select>
         </div>
         <!-- Min PM Price -->
@@ -2101,7 +2117,10 @@ function detModelPicksBracket(modelData, threshold) {
 
 async function simulatePnl() {
   const citySlug = document.getElementById('pnl-city-sel').value;
-  const strategy = document.getElementById('pnl-strategy-sel').value;
+  const strategyRaw = document.getElementById('pnl-strategy-sel').value;
+  const strategy = strategyRaw.startsWith('fade') ? 'fade' : 'follow';
+  const exitMode = strategyRaw.includes('exit-fixed') ? 'fixed' : strategyRaw.includes('exit-pct') ? 'pct' : 'hold';
+  const exitVal = parseFloat(document.getElementById('pnl-exit-val').value);
   const minPmPrice = parseFloat(document.getElementById('pnl-min-pm').value);
   const detFilterOn = document.getElementById('pnl-det-filter').checked;
   const ensEdgePP = parseFloat(document.getElementById('pnl-ens-edge').value);
@@ -2177,15 +2196,52 @@ async function simulatePnl() {
         const ensAvgProb = ensProbCount > 0 ? ensProbSum / ensProbCount : null;
         const wonBracket = !!br.won_bracket;
 
-        let pnl, won, signal;
+        let pnl, won, signal, exitPrice = null, exitType = 'expiry';
         if (strategy === 'fade') {
-          // Bet NO: pay no_cost, win if bracket LOSES
           const cost = br.no_cost || 0;
-          won = !wonBracket;
-          pnl = won ? (1 - cost) : -cost;
           signal = 'NO';
+
+          if (exitMode !== 'hold' && br.price_history && br.price_history.length > 1) {
+            // Simulate exit: scan price history for exit trigger
+            let exited = false;
+            for (const snap of br.price_history) {
+              const noPrice = snap.no || (1 - (snap.yes || 0));
+              if (exitMode === 'fixed' && noPrice >= exitVal) {
+                // Fixed exit: sell NO when it reaches target price
+                exitPrice = noPrice;
+                exitType = 'exit';
+                pnl = noPrice - cost;
+                won = pnl > 0;
+                exited = true;
+                break;
+              } else if (exitMode === 'pct') {
+                // Percentage gain: sell when profit hits target %
+                const targetPrice = cost + (1 - cost) * (exitVal - cost) / (1 - cost);
+                // Simpler: target % profit on cost basis
+                const pctGain = exitVal === 0.93 ? 0.10 : exitVal === 0.95 ? 0.25 : exitVal === 0.97 ? 0.50 : 1.00;
+                const sellAt = cost * (1 + pctGain);
+                if (noPrice >= sellAt) {
+                  exitPrice = noPrice;
+                  exitType = 'exit';
+                  pnl = noPrice - cost;
+                  won = true;
+                  exited = true;
+                  break;
+                }
+              }
+            }
+            if (!exited) {
+              // Never hit exit target — held to expiry
+              won = !wonBracket;
+              pnl = won ? (1 - cost) : -cost;
+              exitType = 'expiry';
+            }
+          } else {
+            // Hold to expiry
+            won = !wonBracket;
+            pnl = won ? (1 - cost) : -cost;
+          }
         } else {
-          // Bet YES: pay yes_cost, win if bracket WINS
           const cost = br.yes_cost || 0;
           won = wonBracket;
           pnl = won ? (1 - cost) : -cost;
@@ -2205,6 +2261,8 @@ async function simulatePnl() {
           won,
           pnl,
           cost: strategy === 'fade' ? (br.no_cost || 0) : (br.yes_cost || 0),
+          exitType,
+          exitPrice,
         });
       });
     });
@@ -2317,9 +2375,9 @@ function renderPnlTable(trades) {
     const cityObj = CITIES.find(c => c.slug === t.city);
     const cityLabel = cityObj ? cityObj.label : t.city;
     const ensAvgStr = t.ensAvgProb != null ? (t.ensAvgProb * 100).toFixed(1) + '%' : '--';
-    const outcomeBadge = t.won
-      ? '<span class="badge bg-success">Win</span>'
-      : '<span class="badge bg-danger">Loss</span>';
+    const exitLabel = t.exitType === 'exit'
+      ? `<span class="badge bg-primary">Sold @${(t.exitPrice*100).toFixed(0)}&cent;</span>`
+      : (t.won ? '<span class="badge bg-success">Win</span>' : '<span class="badge bg-danger">Loss</span>');
     const pnlStr = (t.pnl >= 0 ? '+' : '') + '$' + t.pnl.toFixed(2);
     const rowClass = t.won ? 'table-success' : 'table-danger';
 
@@ -2333,7 +2391,7 @@ function renderPnlTable(trades) {
       <td><span class="badge ${t.signal === 'NO' ? 'bg-warning text-dark' : 'bg-info text-dark'}">${t.signal}</span></td>
       <td class="text-end">${ensAvgStr}</td>
       <td class="text-end ${t.edgePP != null && t.edgePP >= 5 ? 'text-success fw-medium' : ''}">${t.edgePP != null ? t.edgePP.toFixed(1) + 'pp' : '--'}</td>
-      <td class="text-center">${outcomeBadge}</td>
+      <td class="text-center">${exitLabel}</td>
       <td class="text-end fw-medium">${pnlStr}</td>
     `;
     tbody.appendChild(tr);
