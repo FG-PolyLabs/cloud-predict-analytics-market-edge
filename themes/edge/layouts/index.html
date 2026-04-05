@@ -460,9 +460,9 @@
               <th class="text-end" data-bs-toggle="tooltip" style="cursor:help"
                   title="Total records in BigQuery. Forecasts: one row per target date per model run. Polymarket: one row per price snapshot per bracket.">Records</th>
               <th class="text-end" data-bs-toggle="tooltip" style="cursor:help"
-                  title="Forecast records verified against actual observed temperature. Used for accuracy tracking. N/A for Polymarket (price data, not forecasts).">Verified</th>
+                  title="Records where we know the actual observed temperature. If this is lower than Records, there are gaps in the backfill that need to be filled.">Verified</th>
               <th style="min-width:140px" data-bs-toggle="tooltip" style="cursor:help"
-                  title="% of forecast records with actual temps filled in. Higher = more accuracy data. N/A for Polymarket.">Accuracy Data</th>
+                  title="Percentage of records with verified actuals. Gaps mean we're missing observed temperature data for those dates — needs backfill.">Backfill Status</th>
             </tr>
           </thead>
           <tbody id="cov-tbody"></tbody>
