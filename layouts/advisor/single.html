@@ -1,0 +1,543 @@
+{{ define "main" }}
+
+<!-- Sign-in prompt -->
+<div id="signin-prompt" class="text-center py-5">
+  <div class="card mx-auto shadow-sm border-0" style="max-width:380px">
+    <div class="card-body p-4">
+      <i class="bi bi-robot fs-1 text-primary mb-3 d-block"></i>
+      <h4 class="fw-semibold mb-1">Trade Advisor</h4>
+      <p class="text-muted small mb-4">Claude-powered ensemble analysis vs Polymarket prices</p>
+      <button class="btn btn-primary w-100" onclick="signInWithGoogle()">
+        <i class="bi bi-google me-2"></i>Sign in with Google
+      </button>
+    </div>
+  </div>
+</div>
+
+<div id="auth-guard" class="alert alert-warning d-none">
+  <i class="bi bi-lock me-1"></i>Your account is not authorized.
+</div>
+
+<!-- Main UI (hidden until auth) -->
+<div id="advisor-ui" class="d-none">
+
+  <!-- Controls card -->
+  <div class="card shadow-sm border-0 mb-3">
+    <div class="card-body py-3">
+      <div class="row g-2 align-items-end">
+        <div class="col-sm-auto">
+          <label class="form-label small fw-medium mb-1" for="sel-city">City</label>
+          <select class="form-select form-select-sm" id="sel-city" style="min-width:180px">
+            <option value="">— select city —</option>
+          </select>
+        </div>
+        <div class="col-sm-auto">
+          <label class="form-label small fw-medium mb-1" for="inp-target-date">Target Date</label>
+          <input type="date" class="form-control form-control-sm" id="inp-target-date">
+        </div>
+        <div class="col-sm-auto">
+          <label class="form-label small fw-medium mb-1" for="sel-threshold">Market</label>
+          <select class="form-select form-select-sm" id="sel-threshold" style="min-width:200px">
+            <option value="">— select city + date first —</option>
+          </select>
+        </div>
+        <div class="col-sm-auto">
+          <label class="form-label small fw-medium mb-1" for="inp-balance">Account (USDC)</label>
+          <input type="number" class="form-control form-control-sm" id="inp-balance" value="100" min="1" style="width:110px">
+        </div>
+        <div class="col-sm-auto">
+          <button class="btn btn-primary btn-sm" id="btn-analyze" onclick="runAnalysis()">
+            <i class="bi bi-cpu me-1"></i>Analyze
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Loading indicator -->
+  <div id="loading" class="text-center py-5 d-none">
+    <div class="spinner-border text-primary mb-3" role="status"></div>
+    <div class="text-muted small">Claude is analyzing ensemble data vs market prices…</div>
+  </div>
+
+  <!-- Error alert -->
+  <div id="err-alert" class="alert alert-danger d-none mb-3" role="alert"></div>
+
+  <!-- Results (hidden until analysis) -->
+  <div id="results" class="d-none">
+
+    <!-- Recommendation card -->
+    <div class="row g-3 mb-3">
+      <div class="col-md-4">
+        <div class="card border-0 shadow-sm h-100" id="rec-card">
+          <div class="card-body text-center p-4">
+            <div class="mb-2">
+              <span class="badge fs-4 px-4 py-2" id="rec-badge">—</span>
+            </div>
+            <div class="text-muted small mb-3" id="rec-market"></div>
+            <div class="row g-2 text-start mb-3">
+              <div class="col-6">
+                <div class="small text-muted">Edge</div>
+                <div class="fw-semibold" id="rec-edge">—</div>
+              </div>
+              <div class="col-6">
+                <div class="small text-muted">Confidence</div>
+                <div class="fw-semibold" id="rec-confidence">—</div>
+              </div>
+              <div class="col-6">
+                <div class="small text-muted">Size (USDC)</div>
+                <div class="fw-semibold" id="rec-size">—</div>
+              </div>
+              <div class="col-6">
+                <div class="small text-muted">Limit Price</div>
+                <div class="fw-semibold" id="rec-limit">—</div>
+              </div>
+              <div class="col-6">
+                <div class="small text-muted">Lead Days</div>
+                <div class="fw-semibold" id="rec-lead">—</div>
+              </div>
+              <div class="col-6">
+                <div class="small text-muted">Generated</div>
+                <div class="fw-semibold small" id="rec-ts">—</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-md-8">
+        <div class="card border-0 shadow-sm h-100">
+          <div class="card-body p-4">
+            <div class="small text-muted mb-2 fw-semibold text-uppercase" style="letter-spacing:.05em">Claude's Rationale</div>
+            <p class="mb-0" id="rec-rationale" style="line-height:1.7"></p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Data panels row -->
+    <div class="row g-3 mb-3">
+
+      <!-- Ensemble probability -->
+      <div class="col-md-6">
+        <div class="card border-0 shadow-sm h-100">
+          <div class="card-header bg-transparent border-bottom py-2">
+            <span class="small fw-semibold"><i class="bi bi-bar-chart-line me-1 text-primary"></i>Ensemble Probability</span>
+          </div>
+          <div class="card-body">
+            <div class="row g-2 mb-3">
+              <div class="col-6">
+                <div class="p-2 rounded" style="background:#f0f7ff">
+                  <div class="small text-muted">P(YES) — ensemble</div>
+                  <div class="fw-bold fs-5 text-primary" id="ens-pyes">—</div>
+                </div>
+              </div>
+              <div class="col-6">
+                <div class="p-2 rounded" style="background:#fff3cd">
+                  <div class="small text-muted">Market YES price</div>
+                  <div class="fw-bold fs-5 text-warning-emphasis" id="ens-mkt">—</div>
+                </div>
+              </div>
+              <div class="col-4 text-center">
+                <div class="small text-muted">P10</div>
+                <div class="fw-semibold" id="ens-p10">—</div>
+              </div>
+              <div class="col-4 text-center">
+                <div class="small text-muted">P50</div>
+                <div class="fw-semibold" id="ens-p50">—</div>
+              </div>
+              <div class="col-4 text-center">
+                <div class="small text-muted">P90</div>
+                <div class="fw-semibold" id="ens-p90">—</div>
+              </div>
+            </div>
+            <canvas id="chart-brackets" height="140"></canvas>
+            <div class="text-muted small mt-2" id="ens-sources"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Polymarket panel -->
+      <div class="col-md-6">
+        <div class="card border-0 shadow-sm h-100">
+          <div class="card-header bg-transparent border-bottom py-2">
+            <span class="small fw-semibold"><i class="bi bi-currency-dollar me-1 text-success"></i>Polymarket</span>
+          </div>
+          <div class="card-body">
+            <div class="row g-2 mb-3">
+              <div class="col-6">
+                <div class="small text-muted">YES price</div>
+                <div class="fw-semibold" id="mkt-yes">—</div>
+              </div>
+              <div class="col-6">
+                <div class="small text-muted">NO price</div>
+                <div class="fw-semibold" id="mkt-no">—</div>
+              </div>
+              <div class="col-6">
+                <div class="small text-muted">Best bid / ask</div>
+                <div class="fw-semibold" id="mkt-ba">—</div>
+              </div>
+              <div class="col-6">
+                <div class="small text-muted">Spread</div>
+                <div class="fw-semibold" id="mkt-spread">—</div>
+              </div>
+              <div class="col-6">
+                <div class="small text-muted">Volume 24h</div>
+                <div class="fw-semibold" id="mkt-vol">—</div>
+              </div>
+              <div class="col-6">
+                <div class="small text-muted">Liquidity</div>
+                <div class="fw-semibold" id="mkt-liq">—</div>
+              </div>
+            </div>
+            <canvas id="chart-price-history" height="130"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Forecasts table -->
+    <div class="card border-0 shadow-sm mb-3">
+      <div class="card-header bg-transparent border-bottom py-2 d-flex align-items-center justify-content-between">
+        <span class="small fw-semibold"><i class="bi bi-table me-1 text-info"></i>Individual Forecasts</span>
+        <span class="badge bg-secondary" id="fc-count"></span>
+      </div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-sm table-hover mb-0 small" id="tbl-forecasts">
+            <thead class="table-light">
+              <tr>
+                <th>Source</th>
+                <th>Forecast Date</th>
+                <th>Lead</th>
+                <th class="text-end">Tmax</th>
+                <th class="text-end">P10</th>
+                <th class="text-end">P50</th>
+                <th class="text-end">P90</th>
+                <th class="text-end">Members</th>
+              </tr>
+            </thead>
+            <tbody id="tbl-forecasts-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Model accuracy table -->
+    <div class="card border-0 shadow-sm mb-3">
+      <div class="card-header bg-transparent border-bottom py-2">
+        <span class="small fw-semibold"><i class="bi bi-trophy me-1 text-warning"></i>Historical Accuracy — <span id="acc-city"></span></span>
+      </div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-sm table-hover mb-0 small">
+            <thead class="table-light">
+              <tr>
+                <th>Source</th>
+                <th class="text-end">Lead Days</th>
+                <th class="text-end">MAE °C</th>
+                <th class="text-end">RMSE °C</th>
+                <th class="text-end">Bias °C</th>
+                <th class="text-end">N</th>
+              </tr>
+            </thead>
+            <tbody id="tbl-accuracy-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /results -->
+</div><!-- /advisor-ui -->
+
+{{ end }}
+
+{{ define "page-scripts" }}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+<script>
+// ── Auth lifecycle ────────────────────────────────────────────────────────────
+firebase.auth().onAuthStateChanged(user => {
+  const signinEl = document.getElementById('signin-prompt');
+  const guardEl  = document.getElementById('auth-guard');
+  const uiEl     = document.getElementById('advisor-ui');
+
+  if (!user) {
+    signinEl.classList.remove('d-none');
+    guardEl.classList.add('d-none');
+    uiEl.classList.add('d-none');
+    return;
+  }
+  if (!isEmailAllowed(user.email)) {
+    signinEl.classList.add('d-none');
+    guardEl.classList.remove('d-none');
+    uiEl.classList.add('d-none');
+    return;
+  }
+  signinEl.classList.add('d-none');
+  guardEl.classList.add('d-none');
+  uiEl.classList.remove('d-none');
+  initPage();
+});
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+async function initPage() {
+  // Default target date = tomorrow (first market likely to still be open)
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  document.getElementById('inp-target-date').value = tomorrow.toISOString().slice(0,10);
+
+  try {
+    const cities = await api('GET', '/tracked-cities');
+    const sel = document.getElementById('sel-city');
+    (cities || [])
+      .filter(c => c.active)
+      .sort((a,b) => a.display_name.localeCompare(b.display_name))
+      .forEach(c => {
+        const o = document.createElement('option');
+        o.value = c.city;
+        o.textContent = c.display_name || c.city;
+        sel.appendChild(o);
+      });
+  } catch(e) {
+    showError('Failed to load cities: ' + e.message);
+  }
+
+  // Load markets when city or date changes
+  document.getElementById('sel-city').addEventListener('change', loadMarkets);
+  document.getElementById('inp-target-date').addEventListener('change', loadMarkets);
+}
+
+async function loadMarkets() {
+  const city = document.getElementById('sel-city').value;
+  const date = document.getElementById('inp-target-date').value;
+  const sel = document.getElementById('sel-threshold');
+  sel.innerHTML = '<option value="">— loading… —</option>';
+  if (!city || !date) {
+    sel.innerHTML = '<option value="">— select city + date first —</option>';
+    return;
+  }
+  try {
+    const markets = await api('GET', '/advisor/markets' + qs({city, target_date: date}));
+    sel.innerHTML = '<option value="">— select market —</option>';
+    if (!markets || markets.length === 0) {
+      sel.innerHTML = '<option value="">No Polymarket data for this city/date</option>';
+      return;
+    }
+    markets.sort((a,b) => a.threshold - b.threshold).forEach(m => {
+      const o = document.createElement('option');
+      o.value = m.threshold;
+      const edge = m.yes_price !== undefined ? ` (YES ${(m.yes_price*100).toFixed(0)}¢)` : '';
+      o.textContent = `≥ ${m.threshold}°C${edge}`;
+      sel.appendChild(o);
+    });
+  } catch(e) {
+    sel.innerHTML = `<option value="">Error: ${e.message}</option>`;
+  }
+}
+
+// ── Analysis ──────────────────────────────────────────────────────────────────
+let bracketChart = null, priceChart = null;
+
+async function runAnalysis() {
+  const city      = document.getElementById('sel-city').value;
+  const targetDate = document.getElementById('inp-target-date').value;
+  const threshold  = parseFloat(document.getElementById('sel-threshold').value);
+  const balance    = parseFloat(document.getElementById('inp-balance').value) || 100;
+
+  if (!city || !targetDate || isNaN(threshold)) {
+    showError('Please select a city, date, and market first.');
+    return;
+  }
+
+  clearError();
+  document.getElementById('results').classList.add('d-none');
+  document.getElementById('loading').classList.remove('d-none');
+  document.getElementById('btn-analyze').disabled = true;
+
+  try {
+    const data = await api('POST', '/advisor', {
+      city,
+      target_date: targetDate,
+      threshold,
+      account_balance_usdc: balance,
+    });
+    renderResults(data);
+  } catch(e) {
+    showError('Analysis failed: ' + e.message);
+  } finally {
+    document.getElementById('loading').classList.add('d-none');
+    document.getElementById('btn-analyze').disabled = false;
+  }
+}
+
+// ── Render ────────────────────────────────────────────────────────────────────
+function renderResults(d) {
+  // Recommendation card
+  const badge = document.getElementById('rec-badge');
+  badge.textContent = d.action;
+  badge.className = 'badge fs-4 px-4 py-2 ' + actionClass(d.action);
+
+  const card = document.getElementById('rec-card');
+  card.style.borderLeft = '4px solid ' + actionColor(d.action);
+
+  setText('rec-market',
+    `${d.city} · ${d.target_date} · ≥${d.threshold}°C`);
+  setText('rec-edge',
+    (d.edge >= 0 ? '+' : '') + (d.edge * 100).toFixed(1) + '%',
+    d.edge > 0.05 ? 'text-success fw-bold' : d.edge < -0.05 ? 'text-danger fw-bold' : '');
+  setText('rec-confidence', (d.confidence * 100).toFixed(0) + '%');
+  setText('rec-size', '$' + d.size_usdc.toFixed(2));
+  setText('rec-limit', d.limit_price ? d.limit_price.toFixed(3) : '—');
+  setText('rec-lead', d.lead_days + ' days');
+  setText('rec-ts', d.generated_at ? d.generated_at.slice(0,16).replace('T',' ') + ' UTC' : '—');
+  document.getElementById('rec-rationale').textContent = d.rationale || '—';
+
+  // Ensemble
+  setText('ens-pyes', (d.ensemble_prob_yes * 100).toFixed(1) + '%');
+  setText('ens-mkt', d.market_yes_price > 0 ? (d.market_yes_price * 100).toFixed(1) + '%' : 'No data');
+  setText('ens-p10', d.p10_c?.toFixed(1) + '°C');
+  setText('ens-p50', d.p50_c?.toFixed(1) + '°C');
+  setText('ens-p90', d.p90_c?.toFixed(1) + '°C');
+  if (d.sources_used) {
+    const parts = Object.entries(d.sources_used).map(([s,n]) => `${s} (${n})`);
+    setText('ens-sources', `${d.total_members} members from: ` + parts.join(', '));
+  }
+
+  // Bracket chart
+  renderBracketChart(d.brackets || [], d.threshold);
+
+  // Polymarket
+  setText('mkt-yes', d.market_yes_price > 0 ? fmt2(d.market_yes_price) + ` (${(d.market_yes_price*100).toFixed(0)}¢)` : 'No data');
+  setText('mkt-no',  d.market_no_price  > 0 ? fmt2(d.market_no_price)  + ` (${(d.market_no_price*100).toFixed(0)}¢)`  : 'No data');
+  setText('mkt-ba',  d.best_bid > 0 ? `${fmt2(d.best_bid)} / ${fmt2(d.best_ask)}` : '—');
+  setText('mkt-spread', d.spread > 0 ? fmt2(d.spread) : '—');
+  setText('mkt-vol', d.volume_24h > 0 ? '$' + d.volume_24h.toFixed(0) : '—');
+  setText('mkt-liq', d.liquidity > 0 ? '$' + d.liquidity.toFixed(0) : '—');
+  renderPriceChart(d.price_history || []);
+
+  // Forecasts table
+  const fcBody = document.getElementById('tbl-forecasts-body');
+  fcBody.innerHTML = '';
+  (d.forecasts || []).forEach(f => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><span class="badge bg-secondary">${f.source}</span></td>
+      <td>${f.forecast_date}</td>
+      <td>${f.lead_days}</td>
+      <td class="text-end fw-semibold">${f.tmax_c?.toFixed(1)}°C</td>
+      <td class="text-end text-muted">${f.p10_c != null ? f.p10_c.toFixed(1) : '—'}</td>
+      <td class="text-end text-muted">${f.p50_c != null ? f.p50_c.toFixed(1) : '—'}</td>
+      <td class="text-end text-muted">${f.p90_c != null ? f.p90_c.toFixed(1) : '—'}</td>
+      <td class="text-end text-muted">${f.member_count != null ? f.member_count : '—'}</td>
+    `;
+    fcBody.appendChild(tr);
+  });
+  document.getElementById('fc-count').textContent = (d.forecasts || []).length + ' rows';
+
+  // Accuracy table
+  document.getElementById('acc-city').textContent = d.city;
+  const accBody = document.getElementById('tbl-accuracy-body');
+  accBody.innerHTML = '';
+  (d.accuracy || []).forEach(a => {
+    const biasClass = a.bias_c > 0.3 ? 'text-danger' : a.bias_c < -0.3 ? 'text-warning' : 'text-muted';
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><span class="badge bg-secondary">${a.source}</span></td>
+      <td class="text-end">${a.lead_days}</td>
+      <td class="text-end fw-semibold">${a.mae_c.toFixed(2)}</td>
+      <td class="text-end text-muted">${a.rmse_c.toFixed(2)}</td>
+      <td class="text-end ${biasClass}">${a.bias_c >= 0 ? '+' : ''}${a.bias_c.toFixed(2)}</td>
+      <td class="text-end text-muted">${a.n}</td>
+    `;
+    accBody.appendChild(tr);
+  });
+
+  document.getElementById('results').classList.remove('d-none');
+  document.getElementById('results').scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+
+function renderBracketChart(brackets, threshold) {
+  if (bracketChart) { bracketChart.destroy(); bracketChart = null; }
+  const ctx = document.getElementById('chart-brackets').getContext('2d');
+  bracketChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: brackets.map(b => b.label),
+      datasets: [{
+        label: 'P(member in bracket)',
+        data: brackets.map(b => +(b.probability * 100).toFixed(1)),
+        backgroundColor: brackets.map(b => b.lo >= threshold ? 'rgba(25,135,84,0.7)' : 'rgba(13,110,253,0.5)'),
+        borderColor: brackets.map(b => b.lo >= threshold ? '#198754' : '#0d6efd'),
+        borderWidth: 1,
+      }],
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: c => c.raw + '%' } },
+      },
+      scales: {
+        y: { title: { display: true, text: '%' }, ticks: { font: { size: 10 } } },
+        x: { ticks: { font: { size: 9 } } },
+      },
+    },
+  });
+}
+
+function renderPriceChart(history) {
+  if (priceChart) { priceChart.destroy(); priceChart = null; }
+  if (!history.length) return;
+  const ctx = document.getElementById('chart-price-history').getContext('2d');
+  priceChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: history.map(p => p.t ? p.t.slice(5,16) : ''),
+      datasets: [{
+        label: 'YES price',
+        data: history.map(p => +(p.price * 100).toFixed(1)),
+        borderColor: '#0d6efd',
+        backgroundColor: 'rgba(13,110,253,0.08)',
+        fill: true,
+        tension: 0.3,
+        pointRadius: history.length > 40 ? 0 : 3,
+      }],
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: c => c.raw + '¢' } },
+      },
+      scales: {
+        y: { title: { display: true, text: '¢' }, ticks: { font: { size: 10 } } },
+        x: { ticks: { font: { size: 9 }, maxTicksLimit: 8 } },
+      },
+    },
+  });
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function actionClass(a) {
+  return { BUY: 'bg-success', SELL: 'bg-danger', HOLD: 'bg-warning text-dark', NO_MARKET: 'bg-secondary' }[a] || 'bg-secondary';
+}
+function actionColor(a) {
+  return { BUY: '#198754', SELL: '#dc3545', HOLD: '#ffc107', NO_MARKET: '#6c757d' }[a] || '#6c757d';
+}
+function fmt2(v) { return typeof v === 'number' ? v.toFixed(4) : '—'; }
+function setText(id, text, extraClass) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = text;
+  if (extraClass) el.className = extraClass;
+}
+function showError(msg) {
+  const el = document.getElementById('err-alert');
+  el.textContent = msg;
+  el.classList.remove('d-none');
+}
+function clearError() {
+  document.getElementById('err-alert').classList.add('d-none');
+}
+</script>
+{{ end }}
