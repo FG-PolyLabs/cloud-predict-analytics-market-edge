@@ -2,26 +2,36 @@
 
 ## Multi-Repo Project: cloud-predict-analytics
 
-This repo is **one of four** repositories that together form the cloud-predict-analytics system.
+This repo is **one of six** repositories in the cloud-predict-analytics V2 system.
 
-### Repository Layout
+### Repository Layout (V2)
 
 ```
-FutureGadgetLabs/
-├── cloud-predict-analytics-frontend-admin/   ← admin frontend
-├── cloud-predict-analytics/                  ← backend (API + scheduled jobs)
-├── cloud-predict-analytics-data/             ← data repo + public frontend
-└── cloud-predict-analytics-market-edge/      ← THIS REPO (market edge UI)
+FG-PolyLabs/
+├── cloud-predict-analytics-market-edge/       ← THIS REPO (market edge UI)
+├── cloud-predict-analytics-frontend-admin/    ← admin frontend
+├── cloud-predict-core/                         ← V2 hot-path backend (Proxmox + PostgreSQL)
+├── cloud-predict-mcp/                          ← MCP server wrapping cloud-predict-core API
+├── cloud-predict-trader/                       ← Polymarket trading bot (Claude agent)
+├── cloud-predict-ml/                           ← Nightly PG→BigQuery exporter + BQML
+├── cloud-predict-analytics/                    ← V1 GCP backend (legacy)
+└── cloud-predict-analytics-data/              ← JSONL data files + public frontend
 ```
 
-### Repository Roles
+### Repository Roles (V2)
 
 | Repo | Role |
 |------|------|
-| `cloud-predict-analytics-market-edge` | Auth-gated NBM vs Polymarket comparison UI |
-| `cloud-predict-analytics-frontend-admin` | Admin-only UI; CRUD via backend API |
-| `cloud-predict-analytics` | Cloud Run API (`weather-api`) + scheduled jobs |
+| `cloud-predict-analytics-market-edge` | **This repo** — market edge comparison UI; calls **cloud-predict-core** |
+| `cloud-predict-analytics-frontend-admin` | Admin UI; CRUD via **cloud-predict-core** API |
+| `cloud-predict-core` | **V2 backend** — REST API + ingest workers (Proxmox + PostgreSQL) |
+| `cloud-predict-mcp` | MCP server wrapping cloud-predict-core for Claude agents |
+| `cloud-predict-trader` | Claude-powered Polymarket trading agent |
+| `cloud-predict-ml` | Nightly PG → BigQuery exporter (cold-path analytics) |
+| `cloud-predict-analytics` | V1 GCP backend — legacy, kept for historical BQ data |
 | `cloud-predict-analytics-data` | JSONL data files + public frontend |
+
+**Backend URL:** `HUGO_PARAMS_BACKENDURL` should point to cloud-predict-core (Cloudflare Tunnel in prod, `http://localhost:8081` for local dev).
 
 ---
 
