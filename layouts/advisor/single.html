@@ -317,7 +317,34 @@ async function loadMarkets() {
     return;
   }
   try {
-    const markets = await api('GET', '/advisor/markets' + qs({city, target_date: date}));
+    let markets;
+    try {
+      markets = await api('GET', '/advisor/markets' + qs({city, target_date: date}));
+    } catch(e) {
+      if (e.message && e.message.startsWith('HTTP 404')) {
+        // V1 backend: /advisor/markets doesn't exist — derive from /snapshots
+        const snaps = await api('GET', '/snapshots' + qs({city, date, limit: 500}));
+        const latest = new Map();
+        (snaps || []).forEach(s => {
+          const th = s.temp_threshold;
+          if (!th) return;
+          const existing = latest.get(th);
+          if (!existing || s.timestamp > existing.snapshot_at) {
+            latest.set(th, {
+              threshold: th,
+              yes_price: s.yes_cost,
+              spread: s.spread || 0,
+              volume_24h: s.volume_24h || 0,
+              event_slug: s.event_slug,
+              snapshot_at: s.timestamp,
+            });
+          }
+        });
+        markets = Array.from(latest.values());
+      } else {
+        throw e;
+      }
+    }
     sel.innerHTML = '<option value="">— select market —</option>';
     if (!markets || markets.length === 0) {
       sel.innerHTML = '<option value="">No Polymarket data for this city/date</option>';

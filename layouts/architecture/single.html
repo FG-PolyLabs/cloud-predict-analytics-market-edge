@@ -1,0 +1,431 @@
+{{ define "main" }}
+<style>
+  .arch-section { margin-bottom: 2.5rem; }
+  .arch-section h2 { font-size: 1.1rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: #495057; border-bottom: 2px solid #dee2e6; padding-bottom: .4rem; margin-bottom: 1.25rem; }
+  .flow-arrow { color: #6c757d; font-size: 1.5rem; line-height: 1; text-align: center; }
+  .source-badge { font-size: .72rem; font-weight: 600; }
+  .tool-card { border-left: 3px solid #0d6efd; }
+  .step-num { width: 28px; height: 28px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: .8rem; font-weight: 700; flex-shrink: 0; }
+</style>
+
+<!-- Header -->
+<div class="d-flex align-items-center gap-3 mb-4">
+  <div>
+    <h1 class="h4 fw-bold mb-1"><i class="bi bi-diagram-3 me-2 text-primary"></i>System Architecture</h1>
+    <p class="text-muted small mb-0">How Cloud Predict gathers data, runs the trade advisor, and exposes MCP tools</p>
+  </div>
+</div>
+
+<!-- ── 1. DATA INGESTION ──────────────────────────────────────────────────── -->
+<div class="arch-section">
+  <h2><i class="bi bi-cloud-download me-1"></i>1 — Data Ingestion</h2>
+  <div class="row g-3">
+
+    <!-- Weather sources -->
+    <div class="col-lg-7">
+      <div class="card border-0 shadow-sm h-100">
+        <div class="card-header bg-transparent border-bottom py-2">
+          <span class="small fw-semibold"><i class="bi bi-thermometer-half me-1 text-danger"></i>Weather Forecast Sources — 10 models, 44 cities, 4×/day</span>
+        </div>
+        <div class="card-body">
+          <div class="row g-2 mb-3">
+            <div class="col-12">
+              <div class="small text-muted fw-semibold mb-1">Ensemble models (member_temps → P10/P50/P90 + probability distribution)</div>
+              <div class="d-flex flex-wrap gap-1">
+                <span class="badge bg-primary source-badge">ECMWF IFS 51-member</span>
+                <span class="badge bg-primary source-badge">GFS Seamless ~31-member</span>
+                <span class="badge bg-primary source-badge">ICON Seamless ~40-member</span>
+                <span class="badge bg-primary source-badge">GEM Global ~20-member</span>
+                <span class="badge bg-primary source-badge">ECMWF AIFS ~50-member</span>
+              </div>
+              <div class="text-muted" style="font-size:.7rem; margin-top:.25rem">via Open-Meteo ensemble API — no auth required — 00z/12z cycles</div>
+            </div>
+            <div class="col-12 mt-2">
+              <div class="small text-muted fw-semibold mb-1">Point forecast models (tmax_c only)</div>
+              <div class="d-flex flex-wrap gap-1">
+                <span class="badge bg-secondary source-badge">Open-Meteo best-match</span>
+                <span class="badge bg-secondary source-badge">Tomorrow.io</span>
+                <span class="badge bg-secondary source-badge">Pirate Weather</span>
+                <span class="badge bg-secondary source-badge">NWS (US cities)</span>
+                <span class="badge bg-danger source-badge">Wunderground ★ settlement</span>
+              </div>
+              <div class="text-muted" style="font-size:.7rem; margin-top:.25rem">Wunderground = official Polymarket resolution source. Its lead_days=0 row populates the <code>actuals</code> table.</div>
+            </div>
+          </div>
+          <div class="alert alert-light border py-2 px-3 mb-0 small">
+            <strong>Stored in:</strong> <code>forecasts</code> table (PostgreSQL V2) &amp; <code>weather.*_forecasts</code> tables (BigQuery V1).<br>
+            Each row = one (source, city, target_date, forecast_date). Ensemble rows include full <code>member_temps[]</code> array. Upserted on every run via <code>ON CONFLICT DO UPDATE</code>.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Polymarket -->
+    <div class="col-lg-5">
+      <div class="card border-0 shadow-sm h-100">
+        <div class="card-header bg-transparent border-bottom py-2">
+          <span class="small fw-semibold"><i class="bi bi-currency-dollar me-1 text-success"></i>Polymarket Price Data — 44 cities, ~4×/day</span>
+        </div>
+        <div class="card-body">
+          <div class="d-flex flex-column gap-2 small">
+            <div class="d-flex gap-2">
+              <span class="step-num bg-success text-white">1</span>
+              <div><strong>Gamma API</strong> — search events by slug <code>highest-temperature-in-{city}-on-{date}</code>. Returns event metadata and market list.</div>
+            </div>
+            <div class="d-flex gap-2">
+              <span class="step-num bg-success text-white">2</span>
+              <div><strong>CLOB API</strong> — fetch live best_bid, best_ask, last_trade_price per condition_id. Captures spread and order book depth.</div>
+            </div>
+            <div class="d-flex gap-2">
+              <span class="step-num bg-success text-white">3</span>
+              <div><strong>Stored in:</strong> <code>polymarket_snapshots</code> — one row per (city, date, threshold, snapshot_at). YES price history preserved as JSONB <code>price_history[]</code>.</div>
+            </div>
+          </div>
+          <div class="mt-3 small text-muted">
+            <i class="bi bi-info-circle me-1"></i>Each snapshot row has: <code>yes_cost</code>, <code>no_cost</code>, <code>best_bid</code>, <code>best_ask</code>, <code>spread</code>, <code>volume_24h</code>, <code>liquidity</code>, <code>temp_threshold</code>, <code>event_slug</code>.
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── 2. STORAGE ──────────────────────────────────────────────────────────── -->
+<div class="arch-section">
+  <h2><i class="bi bi-database me-1"></i>2 — Storage</h2>
+  <div class="row g-3">
+    <div class="col-md-6">
+      <div class="card border-0 shadow-sm">
+        <div class="card-header bg-primary text-white py-2 small fw-semibold">
+          <i class="bi bi-hdd me-1"></i>V2 — PostgreSQL (Proxmox, on-prem)
+        </div>
+        <div class="card-body small">
+          <table class="table table-sm mb-0">
+            <thead class="table-light"><tr><th>Table</th><th>Key columns</th></tr></thead>
+            <tbody>
+              <tr><td><code>forecasts</code></td><td>source, city, target_date, tmax_c, member_temps[], P10–P90, actual_max_temp_c, error_c</td></tr>
+              <tr><td><code>polymarket_snapshots</code></td><td>city, date, temp_threshold, yes_cost, best_bid, best_ask, price_history JSONB</td></tr>
+              <tr><td><code>actuals</code></td><td>city, date, high_c — settlement observed highs</td></tr>
+              <tr><td><code>tracked_cities</code></td><td>city, source, lat_deg, lon_deg, timezone</td></tr>
+            </tbody>
+          </table>
+          <div class="mt-2 text-muted">Hot path. API served by <code>cloud-predict-core</code> Go service on port 8080, exposed via Cloudflare Tunnel.</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-6">
+      <div class="card border-0 shadow-sm">
+        <div class="card-header bg-secondary text-white py-2 small fw-semibold">
+          <i class="bi bi-cloud me-1"></i>V1 — BigQuery (GCP, Cloud Run)
+        </div>
+        <div class="card-body small">
+          <table class="table table-sm mb-0">
+            <thead class="table-light"><tr><th>Table</th><th>Notes</th></tr></thead>
+            <tbody>
+              <tr><td><code>polymarket_snapshots</code></td><td>Full history, 44 cities</td></tr>
+              <tr><td><code>meteo_ecmwf_forecasts</code></td><td>+GFS, ICON, GEM, AIFS</td></tr>
+              <tr><td><code>tomorrow_forecasts</code></td><td>+Pirate, NWS, WU, OM-det</td></tr>
+              <tr><td><code>tracked_cities</code></td><td>Reference data</td></tr>
+            </tbody>
+          </table>
+          <div class="mt-2 text-muted">Cold path. Powers this frontend today. V2 migration ongoing — nightly BQ export via <code>cloud-predict-ml</code>.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── 3. TRADE ADVISOR AGENT ─────────────────────────────────────────────── -->
+<div class="arch-section">
+  <h2><i class="bi bi-robot me-1"></i>3 — Trade Advisor Agent</h2>
+  <p class="text-muted small mb-3">The advisor runs as a single POST /advisor call on cloud-predict-core. It assembles context in parallel, then asks Claude Opus to make a structured BUY/SELL/HOLD decision.</p>
+
+  <div class="row g-3 mb-3">
+    <!-- Step 1 -->
+    <div class="col-sm-6 col-lg-3">
+      <div class="card border-0 shadow-sm h-100">
+        <div class="card-body">
+          <div class="d-flex align-items-center gap-2 mb-2">
+            <span class="step-num bg-primary text-white">1</span>
+            <span class="small fw-semibold">Inputs</span>
+          </div>
+          <div class="small text-muted">
+            <code>city</code>, <code>target_date</code>, <code>threshold</code> (°C), <code>account_balance_usdc</code>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- Step 2 -->
+    <div class="col-sm-6 col-lg-3">
+      <div class="card border-0 shadow-sm h-100">
+        <div class="card-body">
+          <div class="d-flex align-items-center gap-2 mb-2">
+            <span class="step-num bg-primary text-white">2</span>
+            <span class="small fw-semibold">Parallel data fetch (Go goroutines)</span>
+          </div>
+          <ul class="small text-muted mb-0 ps-3">
+            <li>Ensemble member_temps — ECMWF, GFS, ICON, GEM, AIFS</li>
+            <li>All forecasts for city/date (all 10 sources)</li>
+            <li>Polymarket latest snapshot (price, spread, volume)</li>
+            <li>Historical accuracy (MAE/RMSE/Bias per source × lead)</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+    <!-- Step 3 -->
+    <div class="col-sm-6 col-lg-3">
+      <div class="card border-0 shadow-sm h-100">
+        <div class="card-body">
+          <div class="d-flex align-items-center gap-2 mb-2">
+            <span class="step-num bg-primary text-white">3</span>
+            <span class="small fw-semibold">Ensemble aggregation</span>
+          </div>
+          <div class="small text-muted">
+            Concatenates all member_temps across sources (~150–200 total). Computes:<br>
+            <code>P(tmax ≥ threshold)</code> = fraction of members above the market threshold.<br>
+            Builds 1°C bracket histogram. Computes P10/P50/P90, mean, skewness.
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- Step 4 -->
+    <div class="col-sm-6 col-lg-3">
+      <div class="card border-0 shadow-sm h-100">
+        <div class="card-body">
+          <div class="d-flex align-items-center gap-2 mb-2">
+            <span class="step-num bg-success text-white">4</span>
+            <span class="small fw-semibold">Claude Opus decision</span>
+          </div>
+          <div class="small text-muted">
+            Sends structured text prompt with all data to <strong>Claude Opus 4.7</strong> (extended thinking enabled). Gets back JSON: <code>action</code>, <code>confidence</code>, <code>size_usdc</code>, <code>limit_price</code>, <code>rationale</code>.
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Decision rules -->
+  <div class="card border-0 shadow-sm">
+    <div class="card-header bg-transparent border-bottom py-2">
+      <span class="small fw-semibold"><i class="bi bi-signpost me-1 text-warning"></i>Decision Rules Claude is given</span>
+    </div>
+    <div class="card-body">
+      <div class="row g-3">
+        <div class="col-md-6">
+          <table class="table table-sm small mb-0">
+            <thead class="table-light"><tr><th>Condition</th><th>Action</th></tr></thead>
+            <tbody>
+              <tr><td>ensemble_prob &gt; market_YES + 0.05</td><td><span class="badge bg-success">BUY</span> YES shares</td></tr>
+              <tr><td>ensemble_prob &lt; market_YES − 0.05</td><td><span class="badge bg-danger">SELL</span> (buy NO shares)</td></tr>
+              <tr><td>|edge| &lt; 0.05</td><td><span class="badge bg-warning text-dark">HOLD</span></td></tr>
+              <tr><td>No snapshot for this threshold</td><td><span class="badge bg-secondary">NO_MARKET</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="col-md-6 small text-muted">
+          <strong>Position sizing</strong> (max 10% of account, up to 15% on strong edge):<br>
+          Size down when: spread &gt; 0.03, lead_days &gt; 5, &lt;100 members, poor model accuracy.<br>
+          Size up when: edge &gt; 0.15, lead ≤ 2 days, high ensemble agreement, good liquidity.<br><br>
+          <strong>Limit price</strong>: BUY at best_ask + 0.01–0.02. SELL at (1 − YES) + 0.01.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── 4. MCP SERVER ───────────────────────────────────────────────────────── -->
+<div class="arch-section">
+  <h2><i class="bi bi-plug me-1"></i>4 — MCP Server (cloud-predict-mcp)</h2>
+  <p class="text-muted small mb-3">
+    A stdio-based Model Context Protocol server that wraps the cloud-predict-core API. Any Claude agent (desktop app, Claude Code, custom agent) can connect to it and use these tools to do its own market analysis without going through the frontend.
+  </p>
+  <div class="row g-2">
+
+    <div class="col-md-6 col-lg-4">
+      <div class="card tool-card border-0 shadow-sm h-100">
+        <div class="card-body py-2 px-3">
+          <div class="small fw-semibold mb-1"><code>list_cities</code></div>
+          <div class="text-muted" style="font-size:.78rem">All tracked cities with slug, timezone, active status. Use to discover what markets exist.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-md-6 col-lg-4">
+      <div class="card tool-card border-0 shadow-sm h-100">
+        <div class="card-body py-2 px-3">
+          <div class="small fw-semibold mb-1"><code>get_polymarket_prices</code></div>
+          <div class="text-muted" style="font-size:.78rem">Latest YES/NO price snapshots for a city + date. Returns best_bid, best_ask, spread, volume, liquidity per temperature bracket.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-md-6 col-lg-4">
+      <div class="card tool-card border-0 shadow-sm h-100">
+        <div class="card-body py-2 px-3">
+          <div class="small fw-semibold mb-1"><code>get_price_history</code></div>
+          <div class="text-muted" style="font-size:.78rem">Polymarket price evolution over a date range. Useful for backtesting or spotting market drift patterns.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-md-6 col-lg-4">
+      <div class="card tool-card border-0 shadow-sm h-100">
+        <div class="card-body py-2 px-3">
+          <div class="small fw-semibold mb-1"><code>get_forecasts</code></div>
+          <div class="text-muted" style="font-size:.78rem">Weather model forecasts for a city. Ensemble sources return full member_temps[]. Filterable by source, forecast_date, lead_days.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-md-6 col-lg-4">
+      <div class="card tool-card border-0 shadow-sm h-100">
+        <div class="card-body py-2 px-3">
+          <div class="small fw-semibold mb-1"><code>get_model_accuracy</code></div>
+          <div class="text-muted" style="font-size:.78rem">Historical MAE / RMSE / bias per source × city × lead-day. Use to weight model confidence before deciding on edge.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-md-6 col-lg-4">
+      <div class="card tool-card border-0 shadow-sm h-100">
+        <div class="card-body py-2 px-3">
+          <div class="small fw-semibold mb-1"><code>get_data_coverage</code></div>
+          <div class="text-muted" style="font-size:.78rem">Row counts, date ranges, and % of rows with resolved actuals per source/city. Sanity-check data quality before trading.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12">
+      <div class="card border-0 shadow-sm" style="border-left: 3px solid #198754 !important;">
+        <div class="card-body py-2 px-3">
+          <div class="small fw-semibold mb-1 text-success"><code>get_ensemble_probability</code> — key decision tool</div>
+          <div class="text-muted" style="font-size:.78rem">
+            Aggregates member_temps from all 5 ensemble models (ECMWF, GFS, ICON, GEM, AIFS) into a single temperature probability distribution for a city/date.
+            Builds a 1°C bracket histogram. Returns P10/P50/P90, mean, and <code>P(tmax ≥ X)</code> for any threshold.
+            Compare against Polymarket YES prices to find mispricing edge directly from an agent without writing custom code.
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="alert alert-light border mt-3 small mb-0">
+    <strong>Connect to it:</strong> add to <code>~/.claude/claude_desktop_config.json</code> or Claude Code MCP settings:<br>
+    <code>CLOUDPREDICT_API_URL=https://your-tunnel.trycloudflare.com CLOUDPREDICT_API_TOKEN=... npx cloud-predict-mcp</code>
+  </div>
+</div>
+
+<!-- ── 5. END-TO-END FLOW ──────────────────────────────────────────────────── -->
+<div class="arch-section">
+  <h2><i class="bi bi-arrow-right-circle me-1"></i>5 — End-to-End Flow</h2>
+  <div class="card border-0 shadow-sm">
+    <div class="card-body">
+      <div class="d-flex flex-column flex-md-row align-items-center gap-2 flex-wrap justify-content-center text-center small">
+
+        <div class="card border-0 bg-light px-3 py-2">
+          <i class="bi bi-cloud-sun fs-4 text-primary d-block mb-1"></i>
+          <strong>Weather APIs</strong><br>
+          <span class="text-muted">10 sources, 44 cities</span>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="card border-0 bg-light px-3 py-2">
+          <i class="bi bi-gear fs-4 text-secondary d-block mb-1"></i>
+          <strong>Ingest workers</strong><br>
+          <span class="text-muted">Go binaries, cron 4×/day</span>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="card border-0 bg-light px-3 py-2">
+          <i class="bi bi-hdd fs-4 text-dark d-block mb-1"></i>
+          <strong>PostgreSQL</strong><br>
+          <span class="text-muted">forecasts + snapshots</span>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="card border-0 bg-light px-3 py-2">
+          <i class="bi bi-server fs-4 text-info d-block mb-1"></i>
+          <strong>cloud-predict-core</strong><br>
+          <span class="text-muted">REST API on :8080</span>
+        </div>
+
+        <div class="w-100 d-md-none"></div>
+
+        <div class="flow-arrow d-none d-md-block">→</div>
+        <div class="d-flex flex-column gap-2">
+          <div class="card border-0 bg-primary bg-opacity-10 px-3 py-2">
+            <i class="bi bi-robot fs-5 text-primary d-block mb-1"></i>
+            <strong>POST /advisor</strong><br>
+            <span class="text-muted">Claude Opus 4.7</span>
+          </div>
+          <div class="card border-0 bg-success bg-opacity-10 px-3 py-2">
+            <i class="bi bi-plug fs-5 text-success d-block mb-1"></i>
+            <strong>MCP server</strong><br>
+            <span class="text-muted">7 tools for agents</span>
+          </div>
+          <div class="card border-0 bg-warning bg-opacity-10 px-3 py-2">
+            <i class="bi bi-display fs-5 text-warning-emphasis d-block mb-1"></i>
+            <strong>This frontend</strong><br>
+            <span class="text-muted">Market Edge + Advisor</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── 6. REPOS ────────────────────────────────────────────────────────────── -->
+<div class="arch-section">
+  <h2><i class="bi bi-github me-1"></i>6 — Repositories</h2>
+  <div class="row g-2 small">
+    <div class="col-md-6 col-lg-4">
+      <div class="card border-0 shadow-sm h-100">
+        <div class="card-body py-2 px-3">
+          <div class="fw-semibold"><code>cloud-predict-core</code></div>
+          <div class="text-muted">Go REST API (V2). Migrations, ingest workers, advisor handler, MCP-compatible endpoints. Runs on Proxmox.</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-6 col-lg-4">
+      <div class="card border-0 shadow-sm h-100">
+        <div class="card-body py-2 px-3">
+          <div class="fw-semibold"><code>cloud-predict-mcp</code></div>
+          <div class="text-muted">TypeScript MCP server. 7 tools wrapping the core API. Connect via Claude desktop or Claude Code.</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-6 col-lg-4">
+      <div class="card border-0 shadow-sm h-100">
+        <div class="card-body py-2 px-3">
+          <div class="fw-semibold"><code>cloud-predict-trader</code></div>
+          <div class="text-muted">Go trading bot. Claude agent loop → EIP-712 signed orders → Polymarket CLOB API. Paper-trade mode active.</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-6 col-lg-4">
+      <div class="card border-0 shadow-sm h-100">
+        <div class="card-body py-2 px-3">
+          <div class="fw-semibold"><code>cloud-predict-ml</code></div>
+          <div class="text-muted">Nightly PostgreSQL → BigQuery exporter. Feeds cold-path analytics and backtesting.</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-6 col-lg-4">
+      <div class="card border-0 shadow-sm h-100">
+        <div class="card-body py-2 px-3">
+          <div class="fw-semibold"><code>cloud-predict-analytics</code></div>
+          <div class="text-muted">V1 Go API (Cloud Run + BigQuery). Legacy — still serving this frontend. Being phased out in favour of V2.</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-6 col-lg-4">
+      <div class="card border-0 shadow-sm h-100">
+        <div class="card-body py-2 px-3">
+          <div class="fw-semibold"><code>cloud-predict-analytics-market-edge</code></div>
+          <div class="text-muted">This site. Hugo + Bootstrap 5. GitHub Pages. Firebase auth (email whitelist).</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{{ end }}
