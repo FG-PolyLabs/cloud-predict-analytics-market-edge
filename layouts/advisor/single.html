@@ -326,12 +326,17 @@ async function loadMarkets() {
         const snaps = await api('GET', '/snapshots' + qs({city, date, limit: 500}));
         const latest = new Map();
         (snaps || []).forEach(s => {
-          const th = s.temp_threshold;
-          if (!th) return;
-          const existing = latest.get(th);
+          const raw = s.temp_threshold;
+          if (!raw) return;
+          // V1 stores raw °F for US markets (threshold > 45 can't be a real °C weather value)
+          const isF = raw > 45;
+          const thC = isF ? +((raw - 32) * 5 / 9).toFixed(2) : raw;
+          const key = thC.toFixed(1);
+          const existing = latest.get(key);
           if (!existing || s.timestamp > existing.snapshot_at) {
-            latest.set(th, {
-              threshold: th,
+            latest.set(key, {
+              threshold: thC,
+              threshold_f: isF ? raw : null,
               yes_price: s.yes_cost,
               spread: s.spread || 0,
               volume_24h: s.volume_24h || 0,
@@ -354,7 +359,10 @@ async function loadMarkets() {
       const o = document.createElement('option');
       o.value = m.threshold;
       const edge = m.yes_price !== undefined ? ` (YES ${(m.yes_price*100).toFixed(0)}¢)` : '';
-      o.textContent = `≥ ${m.threshold}°C${edge}`;
+      const label = m.threshold_f != null
+        ? `≥ ${m.threshold_f}°F (${m.threshold.toFixed(1)}°C)${edge}`
+        : `≥ ${m.threshold}°C${edge}`;
+      o.textContent = label;
       sel.appendChild(o);
     });
   } catch(e) {
