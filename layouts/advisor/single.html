@@ -281,13 +281,13 @@ firebase.auth().onAuthStateChanged(user => {
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 async function initPage() {
-  // Default target date = tomorrow (first market likely to still be open)
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  document.getElementById('inp-target-date').value = tomorrow.toISOString().slice(0,10);
+  // Default target date = today (ingest runs --yesterday so today has yesterday's data; tomorrow has none)
+  const today = new Date();
+  document.getElementById('inp-target-date').value = today.toISOString().slice(0,10);
 
   try {
-    const cities = await api('GET', '/tracked-cities');
+    // Only show cities tracked for Polymarket — others have no snapshot data
+    const cities = await api('GET', '/tracked-cities?source=polymarket');
     const sel = document.getElementById('sel-city');
     (cities || [])
       .filter(c => c.active)
